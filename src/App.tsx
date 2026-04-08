@@ -97,6 +97,36 @@ const stripCharacterImagesForCloud = (values: Character[]) => values.map(charact
   return rest;
 });
 
+const optimizeCharacterAvatar = async (imageUrl: string) => {
+  if (!imageUrl.startsWith('data:image/')) return imageUrl;
+
+  return new Promise<string>((resolve) => {
+    const image = new Image();
+    image.onload = () => {
+      const maxDimension = 768;
+      const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(image.width * scale));
+      canvas.height = Math.max(1, Math.round(image.height * scale));
+      const context = canvas.getContext('2d');
+      if (!context) {
+        resolve(imageUrl);
+        return;
+      }
+
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      try {
+        const optimized = canvas.toDataURL('image/webp', 0.82);
+        resolve(optimized.length < imageUrl.length ? optimized : imageUrl);
+      } catch {
+        resolve(imageUrl);
+      }
+    };
+    image.onerror = () => resolve(imageUrl);
+    image.src = imageUrl;
+  });
+};
+
 const buildBattleActionsLog = (roomPlayers: Record<string, any>): string => (
   BATTLE_PLAYER_ACTIONS_PREFIX + Object.keys(roomPlayers)
     .map(pid => `**${roomPlayers[pid].character.name}:** ${roomPlayers[pid].action}`)
@@ -226,7 +256,7 @@ const buildBattleMapContext = (worldData: any, mapState?: BattleMapState, roomPl
   for (const player of mapState.players) {
     const location = getWorldLocationById(worldData, player.locationId);
     const playerName = roomPlayers?.[player.id]?.character?.name || player.name;
-    context += `- ${playerName} is at ${location?.name || player.locationId}. Connected routes: ${(location?.connections || []).join(', ') || 'none'}.\n`;
+    context += `- ${playerName} is at grid (${player.x.toFixed(1)}, ${player.y.toFixed(1)}) near ${location?.name || player.locationId}. Connected routes: ${(location?.connections || []).join(', ') || 'none'}.\n`;
   }
 
   if (mapState.players.length >= 2) {
@@ -250,13 +280,75 @@ const buildBattleMapContext = (worldData: any, mapState?: BattleMapState, roomPl
   }
 
   context += '\nARENA MOVEMENT RULES:\n';
-  context += '- Current map locations are authoritative. Any minimap repositioning already happened before this turn resolves.\n';
+  context += '- Current positions are authoritative at turn start. Resolve any new movement this turn by returning updated battlePositions in the tool call.\n';
+  context += '- Water between islands is traversable. Swimming or sailing can move fighters to fractional x/y coordinates between named locations.\n';
   context += '- If fighters share a location, melee, grapples, and close-range attacks can connect normally.\n';
   context += '- If fighters are one move apart, melee must spend the turn closing distance or chasing before it can land. Ranged pressure and spells may still connect with positioning tradeoffs.\n';
   context += '- If fighters are two or more moves apart, melee cannot land this turn unless the action is entirely about pursuit. Favor ranged attacks, traps, mobility, scouting, or escape.\n';
   context += '- Use chase, flee, pursuit, and terrain-aware narration naturally in the resolution.\n';
+  context += '- When movement happens, update exact x/y positions so the minimap reflects mid-route travel accurately.\n';
 
   return context;
+};
+
+const mergeBattlePositionUpdates = (
+  worldData: any,
+  currentMapState: BattleMapState | undefined,
+  positionUpdates: Record<string, { x?: number; y?: number; locationId?: string }> | null | undefined,
+  roomPlayers: Record<string, any>,
+): BattleMapState | undefined => {
+  if (!currentMapState || !positionUpdates) return currentMapState;
+
+  const gridWidth = worldData?.meta?.gridSize?.width ?? 0;
+  const gridHeight = worldData?.meta?.gridSize?.height ?? 0;
+  const discoveredLocations = new Set(currentMapState.discoveredLocations);
+  const clampCoordinate = (value: number, max: number) => (
+    max > 0 ? clampMapValue(value, 0, max) : value
+  );
+
+  const applyUpdate = <T extends { id: string; name: string; locationId: string; x: number; y: number }>(
+    entity: T,
+    preferredName?: string,
+  ) => {
+    const update = positionUpdates[preferredName || entity.name] || positionUpdates[entity.name] || positionUpdates[entity.id];
+    if (!update) return entity;
+
+    const nextLocationId = typeof update.locationId === 'string' && update.locationId.trim()
+      ? update.locationId
+      : entity.locationId;
+    const nextLocation = getWorldLocationById(worldData, nextLocationId);
+    if (nextLocation) {
+      discoveredLocations.add(nextLocation.id);
+      for (const connectionId of nextLocation.connections || []) {
+        discoveredLocations.add(connectionId);
+      }
+    }
+
+    return {
+      ...entity,
+      locationId: nextLocationId,
+      x: typeof update.x === 'number' && Number.isFinite(update.x)
+        ? clampCoordinate(update.x, gridWidth)
+        : entity.x,
+      y: typeof update.y === 'number' && Number.isFinite(update.y)
+        ? clampCoordinate(update.y, gridHeight)
+        : entity.y,
+    };
+  };
+
+  const players = currentMapState.players.map(player => {
+    const playerName = roomPlayers?.[player.id]?.character?.name || player.name;
+    return applyUpdate(player, playerName);
+  });
+
+  const npcs = currentMapState.npcs.map(npc => applyUpdate(npc));
+
+  return {
+    ...currentMapState,
+    discoveredLocations: Array.from(discoveredLocations),
+    players,
+    npcs,
+  };
 };
 
 const EMPTY_BATTLE_MAP_STATE: BattleMapState = {
@@ -336,6 +428,7 @@ const layoutRepelledMarkers = (
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('home');
   const [gameState, setGameState] = useState<GameState>('menu');
+  const gameStateRef = useRef<GameState>('menu');
   
   // Auth state
   const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem('duo_auth_token'));
@@ -356,6 +449,8 @@ export default function App() {
     const saved = localStorage.getItem('duo_character');
     return saved ? normalizeCharacter(JSON.parse(saved)) : null;
   });
+  const charactersRef = useRef<Character[]>([]);
+  const characterRef = useRef<Character | null>(null);
   
   const [settings, setSettings] = useState(() => {
     const defaultSettings = {
@@ -410,6 +505,14 @@ export default function App() {
         return newChars;
       });
     }
+  }, [character]);
+
+  useEffect(() => {
+    charactersRef.current = characters;
+  }, [characters]);
+
+  useEffect(() => {
+    characterRef.current = character;
   }, [character]);
 
   const getAIClient = useCallback(() => {
@@ -617,6 +720,11 @@ export default function App() {
   const [profileToView, setProfileToView] = useState<string | null>(null);
   useEffect(() => { isBotMatchRef.current = isBotMatch; }, [isBotMatch]);
   const difficultyLabels = ['Easy', 'Medium', 'Hard', 'Superintelligent'];
+  const avatarSyncKeysRef = useRef<Record<string, string>>({});
+
+  useEffect(() => {
+    gameStateRef.current = gameState;
+  }, [gameState]);
 
   const mergeWorldPlayers = useCallback((nextPlayers: WorldPlayer[]) => {
     setWorldPlayers(prev => {
@@ -669,6 +777,31 @@ export default function App() {
     }
     socket.emit('typing', { isTyping: false });
   }, []);
+
+  const syncCharacterAvatarToCloud = useCallback(async (targetCharacter: Character) => {
+    if (!authToken || !targetCharacter.imageUrl) return;
+
+    const syncKey = `${targetCharacter.name}:${targetCharacter.imageUrl.length}:${targetCharacter.imageUrl.slice(-48)}`;
+    if (avatarSyncKeysRef.current[targetCharacter.name] === syncKey) return;
+
+    const res = await fetch('/api/account/character-avatar', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({
+        name: targetCharacter.name,
+        imageUrl: targetCharacter.imageUrl,
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(await res.text());
+    }
+
+    avatarSyncKeysRef.current[targetCharacter.name] = syncKey;
+  }, [authToken]);
 
   useEffect(() => {
     socket.on('characterSynced', () => setIsSynced(true));
@@ -881,15 +1014,21 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
 
   useEffect(() => {
     socket.on('characterSaved', (state: Character) => {
-      const normalizedState = normalizeCharacter(state);
+      const existingCharacter = charactersRef.current.find(entry => entry.name === state.name)
+        || (characterRef.current?.name === state.name ? characterRef.current : null);
+      const normalizedState = normalizeCharacter({
+        ...existingCharacter,
+        ...state,
+        imageUrl: state.imageUrl || existingCharacter?.imageUrl,
+      });
       const stateStr = JSON.stringify(normalizedState);
       if (stateStr !== lastSyncedCharRef.current) {
         setCharacter(normalizedState);
-        const isUpdate = characters.some(c => c.name === normalizedState.name);
+        const isUpdate = charactersRef.current.some(c => c.name === normalizedState.name);
       setMessages(prev => [...prev, { role: 'system', text: isUpdate ? `Updated character: ${normalizedState.name}!` : `Created character: ${normalizedState.name}!` }]);
         lastSyncedCharRef.current = stateStr;
         // Auto-generate character portrait
-        if (!normalizedState.imageUrl) {
+        if (!normalizedState.imageUrl && gameStateRef.current !== 'arena_prep') {
           setTimeout(async () => {
             try {
               console.log("[Portrait Auto] Starting generation for:", state.name);
@@ -906,7 +1045,8 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
                 if ((p as any).inlineData) {
                   const imgData = (p as any).inlineData;
                   const imgUrl = `data:${imgData.mimeType};base64,${imgData.data}`;
-                  setCharacter(prev => prev ? { ...prev, imageUrl: imgUrl } : prev);
+                  const optimizedImageUrl = await optimizeCharacterAvatar(imgUrl);
+                  setCharacter(prev => prev ? { ...prev, imageUrl: optimizedImageUrl } : prev);
                   setMessages(prev => {
                     const filtered = prev.filter(m => m.text !== '🎨 Generating portrait...');
                     return [...filtered, { role: 'system', text: '🎨 Portrait generated!' }];
@@ -1068,13 +1208,17 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
 
       const submitBattleResult = {
         name: "submit_battle_result",
-        description: "Submit the updated character states after resolving the turn. Call this AFTER writing the battle log narrative.",
+        description: "Submit the updated character states after resolving the turn. Call this AFTER writing the battle log narrative. Include battlePositions whenever movement, pursuit, swimming, sailing, or fleeing changes exact map coordinates.",
         parameters: {
           type: "OBJECT",
           properties: {
             characterStates: {
               type: "STRING",
               description: "JSON string of character states. Format: {\"CharName1\": {\"hp\": number, \"mana\": number, \"profileMarkdown\": \"optional updated markdown\"}, \"CharName2\": {\"hp\": number, \"mana\": number}}"
+            },
+            battlePositions: {
+              type: "STRING",
+              description: "Optional JSON string of per-character map positions. Format: {\"CharName1\": {\"x\": number, \"y\": number, \"locationId\": \"nearest_or_tactical_location_id\"}, \"CharName2\": {\"x\": number, \"y\": number, \"locationId\": \"...\"}}. Update this every turn when movement changes positions, including water travel between islands."
             }
           },
           required: ["characterStates"]
@@ -1193,6 +1337,22 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
                 } catch (e) {
                   console.error("Failed to parse battle state from tool call", e);
                 }
+
+                let battlePositionUpdates = null;
+                try {
+                  battlePositionUpdates = typeof args.battlePositions === 'string'
+                    ? JSON.parse(args.battlePositions)
+                    : args.battlePositions;
+                } catch (e) {
+                  console.error("Failed to parse battle positions from tool call", e);
+                }
+
+                const resolvedMapState = mergeBattlePositionUpdates(
+                  worldDataRef.current,
+                  room.mapState,
+                  battlePositionUpdates,
+                  room.players,
+                );
                 
                 let thoughts = finalThoughts.trim();
                 let markdownLog = finalAnswer.trim();
@@ -1200,7 +1360,8 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
                 socket.emit('submitTurnResolution', {
                   log: markdownLog,
                   thoughts: thoughts,
-                  state: newState
+                  state: newState,
+                  mapState: resolvedMapState ?? room.mapState,
                 });
                 clearBattleStatusLog('battle-retry');
                 setRetryAttempt(0);
@@ -1221,15 +1382,34 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
                 }
               }
 
+              const positionMatch = combinedOutput.match(/<BATTLE_POSITIONS>([\s\S]*?)(?:<\/BATTLE_POSITIONS>|$)/);
+              let battlePositionUpdates = null;
+              if (positionMatch) {
+                try {
+                  battlePositionUpdates = JSON.parse(positionMatch[1]);
+                } catch (e) {
+                  console.error("Failed to parse battle positions", e);
+                }
+              }
+
+              const resolvedMapState = mergeBattlePositionUpdates(
+                worldDataRef.current,
+                room.mapState,
+                battlePositionUpdates,
+                room.players,
+              );
+
               let thoughts = finalThoughts.trim();
               let markdownLog = finalAnswer
                 .replace(/<BATTLE_STATE>[\s\S]*?(?:<\/BATTLE_STATE>|$)/, "")
+                .replace(/<BATTLE_POSITIONS>[\s\S]*?(?:<\/BATTLE_POSITIONS>|$)/, "")
                 .trim();
               
               socket.emit('submitTurnResolution', {
                 log: markdownLog,
                 thoughts: thoughts,
-                state: newState
+                state: newState,
+                mapState: resolvedMapState ?? room.mapState,
               });
               clearBattleStatusLog('battle-retry');
               setRetryAttempt(0);
@@ -1270,8 +1450,12 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         const thoughts = data.thoughts || "";
         return [...filtered, `> **Judge's Thoughts:**\n> ${thoughts.replace(/\n/g, '\n> ')}`, data.log];
       });
-      if (data.state) {
+      if (data.players) {
         setPlayers(data.players);
+      }
+      if (data.mapState) {
+        syncBattleMapState(data.mapState);
+      }
         
         // Check win condition
         const alivePlayers = Object.values(data.players).filter((p: any) => p.character.hp > 0);
@@ -1281,12 +1465,17 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
           setBattleLogs(prev => [...prev, `**GAME OVER!** ${winnerName} is victorious!`]);
         } else {
           // If it's a bot match, trigger next bot action
-          const room = { id: roomIdRef.current, players: data.players, isBotMatch: isBotMatchRef.current, botDifficulty: botDifficultyRef.current };
+          const room = {
+            id: roomIdRef.current,
+            players: data.players,
+            mapState: data.mapState ?? battleMapState,
+            isBotMatch: isBotMatchRef.current,
+            botDifficulty: botDifficultyRef.current,
+          };
           if (room.isBotMatch) {
             generateBotAction(room);
           }
         }
-      }
       setIsLockedIn(false);
       // Auto-generate battle scene image after turn resolution (only resolver generates)
       const playerIds = Object.keys(data.players);
@@ -1822,8 +2011,34 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     }
   }, [characters, authToken, syncCharactersToCloud]);
 
+  useEffect(() => {
+    if (!authToken) return;
+
+    const charactersWithAvatars = characters.filter(entry => !!entry.imageUrl);
+    if (charactersWithAvatars.length === 0) return;
+
+    let cancelled = false;
+
+    const syncAvatars = async () => {
+      for (const entry of charactersWithAvatars) {
+        if (cancelled) return;
+        try {
+          await syncCharacterAvatarToCloud(entry);
+        } catch (error) {
+          console.error('[Avatar Sync] Failed to sync character avatar', entry.name, error);
+        }
+      }
+    };
+
+    syncAvatars();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authToken, characters, syncCharacterAvatarToCloud]);
+
   const handleSendCharMessage = async () => {
-    if (!inputText.trim() || isWaitingForChar) return;
+    if (!inputText.trim() || isWaitingForChar || (gameStateRef.current === 'arena_prep' && !!players[socket.id || '']?.lockedIn)) return;
     
     const sentText = inputText.trim();
     clearTypingPresence('character');
@@ -2180,11 +2395,12 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         if ((part as any).inlineData) {
           const imageData = (part as any).inlineData;
           const imageUrl = `data:${imageData.mimeType};base64,${imageData.data}`;
-          setCharacter(prev => prev ? { ...prev, imageUrl } : prev);
+          const optimizedImageUrl = await optimizeCharacterAvatar(imageUrl);
+          setCharacter(prev => prev ? { ...prev, imageUrl: optimizedImageUrl } : prev);
           // Remove the "generating" message and add success
           setMessages(prev => {
             const filtered = prev.filter(m => m.text !== '🎨 Generating portrait... this may take a moment.');
-            return [...filtered, { role: 'system', text: '🎨 Portrait generated!', imageUrl }];
+            return [...filtered, { role: 'system', text: '🎨 Portrait generated!', imageUrl: optimizedImageUrl }];
           });
           console.log("[Portrait] Success! Image generated.");
           return;
@@ -2862,6 +3078,7 @@ Be creative and concise.`;
     const remaining = arenaPreparation?.remaining ?? 0;
     const timerLabel = `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}`;
     const isTweakStage = arenaPreparation?.stage === 'tweak';
+    const isPrepLockedIn = !!(socket.id && players[socket.id]?.lockedIn);
 
     return (
       <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
@@ -2886,7 +3103,8 @@ Be creative and concise.`;
           <div className="flex flex-wrap justify-center gap-5 pt-1">
             {prepPlayers.map(([id, player]) => {
               const isMe = id === socket.id;
-              const isTyping = !isMe && activeTypingIds.has(id);
+              const isLockedIn = !!player.lockedIn;
+              const isTyping = activeTypingIds.has(id) && !isLockedIn;
               const canInspect = !isTweakStage || isMe;
               return (
                 <button
@@ -2896,7 +3114,7 @@ Be creative and concise.`;
                     setProfileToView(player.character.profileMarkdown);
                     setShowProfileModal(true);
                   }}
-                  className={`flex flex-col items-center gap-2 min-w-[84px] ${canInspect ? '' : 'opacity-80 cursor-default'}`}
+                  className={`flex flex-col items-center gap-2 min-w-[96px] ${canInspect ? '' : 'opacity-80 cursor-default'}`}
                 >
                   <div className={`relative w-20 h-20 rounded-full border-4 shadow-lg overflow-hidden ${isMe ? 'border-duo-green bg-duo-green/10' : 'border-duo-blue bg-duo-blue/10'}`}>
                     {(isMe ? character?.imageUrl : player.character.imageUrl) ? (
@@ -2906,15 +3124,21 @@ Be creative and concise.`;
                         {player.character.name.charAt(0).toUpperCase()}
                       </div>
                     )}
-                    {isTyping && (
-                      <div className="absolute -bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-white/95 px-2 py-1 text-duo-blue shadow-md border border-duo-blue/20">
-                        <TypingDots dotClassName="h-1.5 w-1.5" />
-                      </div>
-                    )}
                   </div>
                   <div className="text-center">
                     <div className="text-xs font-black text-duo-text truncate max-w-[90px]">{isMe ? 'You' : player.character.name}</div>
                     <div className="text-[10px] font-bold text-duo-gray-dark">Tap to inspect</div>
+                  </div>
+                  <div className="h-6 flex items-center justify-center">
+                    {isLockedIn ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-green-100 text-green-700 border border-green-200 px-2 py-0.5 text-[10px] font-black">
+                        <Check className="w-3 h-3" /> Locked in
+                      </span>
+                    ) : isTyping ? (
+                      <span className="inline-flex items-center justify-center rounded-full bg-white/95 px-2 py-1 text-duo-blue shadow-sm border border-duo-blue/20">
+                        <TypingDots dotClassName="h-1.5 w-1.5" />
+                      </span>
+                    ) : null}
                   </div>
                 </button>
               );
@@ -2983,11 +3207,21 @@ Be creative and concise.`;
                 className="flex-1 bg-duo-gray rounded-2xl px-4 py-3 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue resize-none overflow-y-auto"
                 rows={1}
                 style={{ minHeight: '48px', maxHeight: '50vh' }}
-                disabled={isWaitingForChar}
+                disabled={isWaitingForChar || isPrepLockedIn}
               />
               <button
+                onClick={() => {
+                  clearTypingPresence('character');
+                  socket.emit('passArenaPreparation');
+                }}
+                disabled={isWaitingForChar || isPrepLockedIn}
+                className="duo-btn duo-btn-gray px-4 flex items-center justify-center disabled:opacity-50 text-xs font-black"
+              >
+                Pass
+              </button>
+              <button
                 onClick={handleSendCharMessage}
-                disabled={isWaitingForChar || !inputText.trim()}
+                disabled={isWaitingForChar || isPrepLockedIn || !inputText.trim()}
                 className="duo-btn duo-btn-blue px-6 flex items-center justify-center disabled:opacity-50"
               >
                 <Send className="w-5 h-5" />
@@ -3279,9 +3513,15 @@ Be creative and concise.`;
       battleMapState.players.length > 0 ||
       battleMapState.npcs.length > 0
     );
-    const activeLocationId = isBattleMap
-      ? battleMapState.players.find(player => player.id === socket.id)?.locationId ?? explorationState.locationId
-      : explorationState.locationId;
+    const activeBattlePlayer = isBattleMap
+      ? battleMapState.players.find(player => player.id === socket.id)
+      : null;
+    const activePosition = activeBattlePlayer || {
+      locationId: explorationState.locationId,
+      x: explorationState.x,
+      y: explorationState.y,
+    };
+    const activeLocationId = activePosition.locationId ?? explorationState.locationId;
     const currentLoc = worldData.locations.find((loc: WorldLocation) => loc.id === activeLocationId) ?? getCurrentLocation();
     const gridSize = worldData.meta.gridSize;
     const mapW = 140;
@@ -3293,10 +3533,24 @@ Be creative and concise.`;
     const miniScaleY = mapH / gridSize.height;
     const fullScaleX = fullMapW / gridSize.width;
     const fullScaleY = fullMapH / gridSize.height;
-    const playerPixelX = currentLoc ? currentLoc.x * miniScaleX : mapW / 2;
-    const playerPixelY = currentLoc ? currentLoc.y * miniScaleY : mapH / 2;
+    const currentMapX = typeof activePosition.x === 'number' && Number.isFinite(activePosition.x)
+      ? activePosition.x
+      : currentLoc?.x ?? gridSize.width / 2;
+    const currentMapY = typeof activePosition.y === 'number' && Number.isFinite(activePosition.y)
+      ? activePosition.y
+      : currentLoc?.y ?? gridSize.height / 2;
+    const playerPixelX = currentMapX * miniScaleX;
+    const playerPixelY = currentMapY * miniScaleY;
     const miniOffsetX = mapW / 2 - playerPixelX;
     const miniOffsetY = mapH / 2 - playerPixelY;
+    const centerFullMapOnCurrentPosition = (zoom: number) => {
+      const containerW = window.innerWidth - 32;
+      const containerH = window.innerHeight - 32;
+      setMapPan({
+        x: containerW / 2 - currentMapX * (containerW / gridSize.width) * zoom,
+        y: containerH / 2 - currentMapY * (containerH / gridSize.height) * zoom,
+      });
+    };
 
     const discoveredLocationIds = isBattleMap ? battleMapState.discoveredLocations : explorationState.discoveredLocations;
     const connectedLocationIds = new Set(currentLoc?.connections || []);
@@ -3385,13 +3639,9 @@ Be creative and concise.`;
             className="bg-blue-900/80 rounded-xl border-2 border-duo-gray overflow-hidden relative cursor-pointer"
             style={{ width: mapW, height: mapH }}
             onClick={() => {
-              const cl = currentLoc;
-              if (cl && worldData?.meta?.gridSize) {
-                const gs = worldData.meta.gridSize;
-                const containerW = window.innerWidth - 32;
-                const containerH = window.innerHeight - 32;
-                setMapPan({ x: containerW / 2 - cl.x * (containerW / gs.width), y: containerH / 2 - cl.y * (containerH / gs.height) });
+              if (worldData?.meta?.gridSize) {
                 setMapZoom(1);
+                centerFullMapOnCurrentPosition(1);
               }
               setShowFullMap(true);
             }}
@@ -3477,6 +3727,7 @@ Be creative and concise.`;
             </div>
             {/* Center crosshair */}
             <div className="absolute rounded-full border-2 border-duo-green/70" style={{ left: mapW/2 - 4, top: mapH/2 - 4, width: 8, height: 8, pointerEvents: 'none' }} />
+            <div className="absolute rounded-full bg-duo-green shadow-[0_0_10px_rgba(34,197,94,0.75)]" style={{ left: mapW / 2 - 2, top: mapH / 2 - 2, width: 4, height: 4, pointerEvents: 'none' }} />
             {/* Compass */}
             <span className="absolute top-0.5 left-1/2 -translate-x-1/2 text-[8px] font-black text-red-400/80 pointer-events-none">N</span>
             <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 text-[8px] font-black text-white/50 pointer-events-none">S</span>
@@ -3526,11 +3777,8 @@ Be creative and concise.`;
                 <button onClick={() => setMapZoom(z => Math.min(5, z + 0.3))} className="bg-white/90 rounded-full w-7 h-7 text-sm font-black text-blue-900 shadow">+</button>
                 <button onClick={() => setMapZoom(z => Math.max(0.5, z - 0.3))} className="bg-white/90 rounded-full w-7 h-7 text-sm font-black text-blue-900 shadow">−</button>
                 <button onClick={() => {
-                  const cl = currentLoc;
-                  if (cl && gridSize) {
-                    const containerW = window.innerWidth - 32;
-                    const containerH = window.innerHeight - 32;
-                    setMapPan({ x: containerW / 2 - cl.x * (containerW / gridSize.width) * mapZoom, y: containerH / 2 - cl.y * (containerH / gridSize.height) * mapZoom });
+                  if (gridSize) {
+                    centerFullMapOnCurrentPosition(mapZoom);
                   }
                 }} className="bg-white/90 rounded-full px-2 h-7 text-[10px] font-bold text-blue-900 shadow flex items-center gap-1">
                   <Target className="w-3 h-3" /> Center
@@ -3610,6 +3858,13 @@ Be creative and concise.`;
                     </React.Fragment>
                   );
                 })}
+                <div
+                  className="absolute flex flex-col items-center pointer-events-none transition-all duration-300 ease-out"
+                  style={{ left: currentMapX * fullScaleX, top: currentMapY * fullScaleY, transform: 'translate(-50%, -50%)' }}
+                >
+                  <div className="rounded-full bg-duo-green ring-4 ring-duo-green/25 shadow-[0_0_18px_rgba(34,197,94,0.65)]" style={{ width: 10, height: 10 }} />
+                  <span className="text-[8px] font-black text-duo-green mt-1 whitespace-nowrap">You</span>
+                </div>
                 {visiblePlayers.map(player => {
                   const anchorX = player.x * fullScaleX;
                   const anchorY = player.y * fullScaleY;

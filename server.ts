@@ -29,7 +29,21 @@ async function startServer() {
     },
   });
 
-  app.use(express.json({ limit: '10mb' }));
+  app.use(express.json({ limit: '25mb' }));
+
+  const mergeStoredCharacterAvatars = (storedCharacters: any[], incomingCharacters: any[]) => {
+    const storedByName = new Map((storedCharacters || []).map(character => [character.name, character]));
+    return incomingCharacters.map(character => {
+      const stored = storedByName.get(character.name);
+      return {
+        ...stored,
+        ...character,
+        imageUrl: typeof character?.imageUrl === 'string' && character.imageUrl.trim()
+          ? character.imageUrl
+          : stored?.imageUrl,
+      };
+    });
+  };
 
   // Load world data
   const worldPath = path.join(process.cwd(), "world.json");
@@ -188,14 +202,43 @@ async function startServer() {
     try {
       const { characters, activeCharacterIndex } = req.body;
       if (!Array.isArray(characters)) return res.status(400).json({ error: "Characters must be an array" });
+      const user = await db.collection("users").findOne({ username: req.user.username });
+      if (!user) return res.status(404).json({ error: "User not found" });
+      const mergedCharacters = mergeStoredCharacterAvatars(user.characters || [], characters);
       
       await db.collection("users").updateOne(
         { username: req.user.username },
-        { $set: { characters, activeCharacterIndex: activeCharacterIndex || 0, updatedAt: new Date() } }
+        { $set: { characters: mergedCharacters, activeCharacterIndex: activeCharacterIndex || 0, updatedAt: new Date() } }
       );
       res.json({ success: true });
     } catch (e) {
       res.status(500).json({ error: "Failed to save characters" });
+    }
+  });
+
+  app.post("/api/account/character-avatar", authenticateToken, async (req: any, res) => {
+    if (!db) return res.status(503).json({ error: "Database not available" });
+    try {
+      const { name, imageUrl } = req.body;
+      if (!name || typeof imageUrl !== 'string' || !imageUrl.trim()) {
+        return res.status(400).json({ error: "Character name and imageUrl are required" });
+      }
+
+      const user = await db.collection("users").findOne({ username: req.user.username });
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      const characters = (user.characters || []).map((character: any) => (
+        character.name === name ? { ...character, imageUrl } : character
+      ));
+
+      await db.collection("users").updateOne(
+        { username: req.user.username },
+        { $set: { characters, updatedAt: new Date() } }
+      );
+
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ error: "Failed to save character avatar" });
     }
   });
 
@@ -553,6 +596,70 @@ async function startServer() {
     };
   };
 
+  const sanitizeBattleMapState = (nextMapState: any, previousMapState: BattleMapState): BattleMapState => {
+    const gridWidth = worldData?.meta?.gridSize?.width ?? 0;
+    const gridHeight = worldData?.meta?.gridSize?.height ?? 0;
+    const validLocationIds = new Set((worldData?.locations || []).map((location: any) => location.id));
+    const clampCoordinate = (value: unknown, max: number, fallback: number) => (
+      typeof value === 'number' && Number.isFinite(value)
+        ? (max > 0 ? Math.min(max, Math.max(0, value)) : value)
+        : fallback
+    );
+    const resolveLocationId = (value: unknown, fallback: string) => (
+      typeof value === 'string' && validLocationIds.has(value) ? value : fallback
+    );
+
+    const nextPlayersById = new Map(
+      Array.isArray(nextMapState?.players)
+        ? nextMapState.players
+            .filter((player: any) => player?.id)
+            .map((player: any) => [player.id, player])
+        : []
+    );
+    const nextNpcsById = new Map(
+      Array.isArray(nextMapState?.npcs)
+        ? nextMapState.npcs
+            .filter((npc: any) => npc?.id)
+            .map((npc: any) => [npc.id, npc])
+        : []
+    );
+
+    const players = previousMapState.players.map((player) => {
+      const incoming: any = nextPlayersById.get(player.id) || {};
+      return {
+        ...player,
+        name: typeof incoming.name === 'string' && incoming.name.trim() ? incoming.name : player.name,
+        locationId: resolveLocationId(incoming.locationId, player.locationId),
+        x: clampCoordinate(incoming.x, gridWidth, player.x),
+        y: clampCoordinate(incoming.y, gridHeight, player.y),
+      };
+    });
+
+    const npcs = previousMapState.npcs.map((npc) => {
+      const incoming: any = nextNpcsById.get(npc.id) || {};
+      return {
+        ...npc,
+        name: typeof incoming.name === 'string' && incoming.name.trim() ? incoming.name : npc.name,
+        role: typeof incoming.role === 'string' && incoming.role.trim() ? incoming.role : npc.role,
+        followTargetId: typeof incoming.followTargetId === 'string' || incoming.followTargetId === null
+          ? incoming.followTargetId
+          : npc.followTargetId,
+        locationId: resolveLocationId(incoming.locationId, npc.locationId),
+        x: clampCoordinate(incoming.x, gridWidth, npc.x),
+        y: clampCoordinate(incoming.y, gridHeight, npc.y),
+      };
+    });
+
+    return {
+      discoveredLocations: expandBattleDiscoveredLocations([
+        ...players.map((player) => player.locationId),
+        ...npcs.map((npc) => npc.locationId),
+      ]),
+      players,
+      npcs,
+    };
+  };
+
   const emitBattleMapState = (roomId: string) => {
     const room = rooms[roomId];
     if (!room?.mapState) return;
@@ -657,12 +764,45 @@ async function startServer() {
     });
   };
 
+  const getArenaPreparationParticipantIds = (room: any) => (
+    Object.keys(room.players).filter(playerId => !room.players[playerId]?.character?.isNpcAlly)
+  );
+
+  const maybeAdvanceArenaPreparation = (roomId: string) => {
+    const room = rooms[roomId];
+    if (!room || room.phase !== 'tweak') return;
+
+    const participantIds = getArenaPreparationParticipantIds(room);
+    if (participantIds.length === 0) {
+      startBattleRoom(roomId);
+      return;
+    }
+
+    const allLockedIn = participantIds.every(playerId => !!room.players[playerId]?.lockedIn);
+    if (allLockedIn) {
+      startBattleRoom(roomId);
+    }
+  };
+
+  const lockArenaPreparationPlayer = (roomId: string, playerId: string) => {
+    const room = rooms[roomId];
+    if (!room?.players?.[playerId]) return;
+    room.players[playerId].lockedIn = true;
+    emitRoomPlayersUpdated(roomId);
+    maybeAdvanceArenaPreparation(roomId);
+  };
+
   const startBattleRoom = (roomId: string) => {
     const room = rooms[roomId];
     if (!room) return;
 
     clearArenaPreparationTimer(roomId);
     room.phase = 'battle';
+    for (const playerId of Object.keys(room.players)) {
+      room.players[playerId].lockedIn = false;
+      room.players[playerId].action = "";
+      room.players[playerId].autoLockedThisTurn = false;
+    }
     emitTypingStatus(`room:${roomId}`);
     io.to(roomId).emit('matchFound', {
       roomId,
@@ -680,6 +820,11 @@ async function startServer() {
 
     clearArenaPreparationTimer(roomId);
     room.phase = 'preview';
+    for (const playerId of Object.keys(room.players)) {
+      room.players[playerId].lockedIn = false;
+      room.players[playerId].action = "";
+      room.players[playerId].autoLockedThisTurn = false;
+    }
     arenaPreparationTimers[roomId] = {
       interval: null as any,
       stage: 'preview',
@@ -700,6 +845,11 @@ async function startServer() {
           timer.stage = 'tweak';
           timer.remaining = ARENA_TWEAK_SECONDS;
           activeRoom.phase = 'tweak';
+          for (const playerId of Object.keys(activeRoom.players)) {
+            activeRoom.players[playerId].lockedIn = !!activeRoom.players[playerId]?.character?.isNpcAlly;
+          }
+          emitRoomPlayersUpdated(roomId);
+          maybeAdvanceArenaPreparation(roomId);
           emitArenaPreparationState(roomId);
           return;
         }
@@ -1441,7 +1591,12 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       const roomId = players[socket.id]?.room;
       if (roomId && rooms[roomId]?.players?.[socket.id] && rooms[roomId].phase !== 'battle') {
         rooms[roomId].players[socket.id].character = normalizedState;
-        emitRoomPlayersUpdated(roomId);
+        if (rooms[roomId].phase === 'tweak') {
+          clearTypingForSocket(socket.id);
+          lockArenaPreparationPlayer(roomId, socket.id);
+        } else {
+          emitRoomPlayersUpdated(roomId);
+        }
       }
       socket.emit("characterSaved", normalizedState);
       socket.emit("characterSynced");
@@ -1996,6 +2151,17 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       setTypingForSocket(socket.id, data?.isTyping !== false);
     });
 
+    socket.on("passArenaPreparation", () => {
+      const roomId = players[socket.id]?.room;
+      if (!roomId) return;
+
+      const room = rooms[roomId];
+      if (!room || room.phase !== 'tweak' || !room.players[socket.id]) return;
+
+      clearTypingForSocket(socket.id);
+      lockArenaPreparationPlayer(roomId, socket.id);
+    });
+
     socket.on("updateBotPreparationProfile", (data: { roomId?: string; botId: string; profileMarkdown: string }) => {
       const roomId = players[socket.id]?.room || data.roomId;
       if (!roomId) return;
@@ -2007,7 +2173,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       if (!botPlayer?.character || typeof data.profileMarkdown !== 'string' || !data.profileMarkdown.trim()) return;
 
       botPlayer.character.profileMarkdown = data.profileMarkdown.trim();
-      emitRoomPlayersUpdated(roomId);
+      lockArenaPreparationPlayer(roomId, data.botId);
     });
 
     socket.on("botAction", (data) => {
@@ -2116,6 +2282,10 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         }
       }
 
+      if (room.mapState && data.mapState) {
+        room.mapState = sanitizeBattleMapState(data.mapState, room.mapState);
+      }
+
       // Reset locks
       for (const pid of Object.keys(room.players)) {
         room.players[pid].lockedIn = false;
@@ -2128,6 +2298,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         thoughts: data.thoughts,
         state: newState,
         players: room.players,
+        mapState: room.mapState,
       });
 
       // Start timer for next turn if game continues (more than 1 player alive)
