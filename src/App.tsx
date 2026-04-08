@@ -1120,7 +1120,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         ...state,
         imageUrl: state.imageUrl || existingCharacter?.imageUrl,
       });
-      const stateStr = JSON.stringify(normalizedState);
+      const stateStr = JSON.stringify(stripCharacterImageForSync(normalizedState));
       if (stateStr !== lastSyncedCharRef.current) {
         setCharacter(normalizedState);
         const isUpdate = charactersRef.current.some(c => c.name === normalizedState.name);

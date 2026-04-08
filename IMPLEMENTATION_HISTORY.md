@@ -55,6 +55,7 @@ This file summarizes the most recent implemented changes so test planning can ta
 51. Avatar generation chat messages can now render inline multi-frame previews when the image model returns progressive frames.
 52. The active selected character is now persisted by name so reloads prefer the user’s last explicit legend choice.
 53. Character switching no longer rewrites the full character list when the selected legend data is unchanged.
+54. Incoming character sync now dedupes against stripped payload data so portrait preservation does not create an infinite selection snap-back loop.
 
 Suggested high-priority test areas:
 
