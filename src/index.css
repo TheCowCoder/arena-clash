@@ -1,0 +1,99 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Nunito", ui-sans-serif, system-ui, sans-serif;
+  --color-duo-green: #58cc02;
+  --color-duo-green-dark: #58a700;
+  --color-duo-blue: #1cb0f6;
+  --color-duo-blue-dark: #1899d6;
+  --color-duo-red: #ff4b4b;
+  --color-duo-red-dark: #ea2b2b;
+  --color-duo-gray: #e5e5e5;
+  --color-duo-gray-dark: #afafaf;
+  --color-duo-text: #4b4b4b;
+  --color-duo-bg: #ffffff;
+}
+
+body {
+  font-family: 'Nunito', sans-serif;
+  background-color: var(--color-duo-bg);
+  color: var(--color-duo-text);
+  -webkit-font-smoothing: antialiased;
+  font-size: 0.875rem; /* Decrease text size globally */
+}
+
+.duo-btn {
+  @apply relative rounded-2xl font-bold uppercase tracking-wider text-white transition-transform active:translate-y-1;
+}
+
+.duo-btn-green {
+  @apply bg-duo-green border-b-4 border-duo-green-dark;
+}
+.duo-btn-green:active {
+  @apply border-b-0 mt-1;
+}
+
+.duo-btn-blue {
+  @apply bg-duo-blue border-b-4 border-duo-blue-dark;
+}
+.duo-btn-blue:active {
+  @apply border-b-0 mt-1;
+}
+
+.duo-btn-gray {
+  @apply bg-duo-gray text-duo-gray-dark border-b-4 border-duo-gray-dark;
+}
+.duo-btn-gray:active {
+  @apply border-b-0 mt-1;
+}
+
+.duo-card {
+  @apply bg-white rounded-2xl border-2 border-duo-gray shadow-sm;
+}
+
+.chat-bubble-me {
+  @apply bg-duo-blue text-white rounded-2xl rounded-br-none px-4 py-3 max-w-[80%];
+}
+
+.chat-bubble-them {
+  @apply bg-duo-gray text-duo-text rounded-2xl rounded-bl-none px-4 py-3 max-w-[80%];
+}
+
+.markdown-body {
+  @apply text-sm leading-relaxed;
+}
+.markdown-body h1 { @apply text-2xl font-black mb-4 text-duo-text border-b-2 border-duo-gray pb-2; }
+.markdown-body h2 { @apply text-xl font-black mb-3 text-duo-text mt-4; }
+.markdown-body h3 { @apply text-lg font-black mb-2 text-duo-text mt-3; }
+.markdown-body p {
+  @apply mb-3;
+}
+.markdown-body strong {
+  @apply font-bold text-duo-blue-dark;
+}
+.markdown-body em {
+  @apply italic;
+}
+.markdown-body ul {
+  @apply list-disc pl-5 mb-4 space-y-1;
+}
+.markdown-body ol {
+  @apply list-decimal pl-5 mb-4 space-y-1;
+}
+.markdown-body table {
+  @apply w-full border-collapse mb-4 rounded-xl overflow-hidden border-2 border-duo-gray;
+}
+.markdown-body th {
+  @apply bg-duo-gray px-4 py-2 text-left font-black text-xs uppercase tracking-wider;
+}
+.markdown-body td {
+  @apply border-t border-duo-gray px-4 py-2 text-sm;
+}
+.markdown-body blockquote {
+  @apply border-l-4 border-duo-blue pl-4 italic text-duo-gray-dark my-4;
+}
+.markdown-body hr {
+  @apply my-6 border-t-2 border-duo-gray;
+}
+
