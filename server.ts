@@ -468,6 +468,33 @@ async function startServer() {
     return worldLocations.slice(0, 4);
   };
 
+  const getWorldLocation = (locationId: string) => (
+    worldData?.locations?.find((entry: any) => entry.id === locationId) || null
+  );
+
+  const getLocationHopDistance = (startLocationId: string, endLocationId: string) => {
+    if (!startLocationId || !endLocationId) return Number.POSITIVE_INFINITY;
+    if (startLocationId === endLocationId) return 0;
+
+    const visited = new Set<string>([startLocationId]);
+    const queue: Array<{ locationId: string; distance: number }> = [{ locationId: startLocationId, distance: 0 }];
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current) continue;
+
+      const location = getWorldLocation(current.locationId);
+      for (const connectionId of location?.connections || []) {
+        if (visited.has(connectionId)) continue;
+        if (connectionId === endLocationId) return current.distance + 1;
+        visited.add(connectionId);
+        queue.push({ locationId: connectionId, distance: current.distance + 1 });
+      }
+    }
+
+    return Number.POSITIVE_INFINITY;
+  };
+
   const expandBattleDiscoveredLocations = (locationIds: string[]) => {
     const discovered = new Set<string>();
 
@@ -1407,6 +1434,10 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
     socket.on("characterCreated", (state) => {
       const normalizedState = { ...state, gold: typeof state?.gold === 'number' ? state.gold : 25 };
       players[socket.id] = { ...players[socket.id], character: normalizedState };
+      if (explorationPlayers[socket.id]) {
+        explorationPlayers[socket.id].character = normalizedState;
+        emitExplorationPlayersUpdated();
+      }
       const roomId = players[socket.id]?.room;
       if (roomId && rooms[roomId]?.players?.[socket.id] && rooms[roomId].phase !== 'battle') {
         rooms[roomId].players[socket.id].character = normalizedState;
@@ -1528,6 +1559,23 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         ...room.mapState.npcs.map((npc: BattleMapNpcState) => npc.locationId),
       ]);
 
+      const opponentDistances = room.mapState.players
+        .filter((player: BattleMapPlayerState) => player.id !== socket.id)
+        .map((player: BattleMapPlayerState) => getLocationHopDistance(nextLocation.id, player.locationId))
+        .filter((distance: number) => Number.isFinite(distance));
+      const nearestOpponentDistance = opponentDistances.length > 0 ? Math.min(...opponentDistances) : Number.POSITIVE_INFINITY;
+      const moverName = room.players[socket.id]?.character?.name || 'A fighter';
+      const distanceLabel = nearestOpponentDistance === 0
+        ? 'now shares the same ground as the opponent'
+        : nearestOpponentDistance === 1
+          ? 'is now one move away from the opponent'
+          : Number.isFinite(nearestOpponentDistance)
+            ? `is now ${nearestOpponentDistance} moves away from the opponent`
+            : 'has an uncertain distance to the opponent';
+
+      io.to(roomId).emit('battleMapMovementLog', {
+        log: `🗺️ **${moverName}** repositions to **${nextLocation.name}** and ${distanceLabel}.`,
+      });
       emitBattleMapState(roomId);
     });
 
@@ -1540,6 +1588,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       if (data.character) {
         ep.character = { ...ep.character, ...data.character };
         players[socket.id] = { ...players[socket.id], character: { ...players[socket.id]?.character, ...data.character } };
+        emitExplorationPlayersUpdated();
       }
     });
 

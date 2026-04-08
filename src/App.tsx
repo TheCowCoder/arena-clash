@@ -192,6 +192,73 @@ const getLocationMarkerGlyph = (type: string) => {
   return '·';
 };
 
+const getWorldLocationById = (worldData: any, locationId?: string | null): WorldLocation | null => (
+  worldData?.locations?.find((entry: WorldLocation) => entry.id === locationId) || null
+);
+
+const getLocationHopDistance = (worldData: any, startLocationId?: string | null, endLocationId?: string | null): number => {
+  if (!startLocationId || !endLocationId) return Number.POSITIVE_INFINITY;
+  if (startLocationId === endLocationId) return 0;
+
+  const visited = new Set<string>([startLocationId]);
+  const queue: Array<{ locationId: string; distance: number }> = [{ locationId: startLocationId, distance: 0 }];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) continue;
+
+    const location = getWorldLocationById(worldData, current.locationId);
+    for (const connectionId of location?.connections || []) {
+      if (visited.has(connectionId)) continue;
+      if (connectionId === endLocationId) return current.distance + 1;
+      visited.add(connectionId);
+      queue.push({ locationId: connectionId, distance: current.distance + 1 });
+    }
+  }
+
+  return Number.POSITIVE_INFINITY;
+};
+
+const buildBattleMapContext = (worldData: any, mapState?: BattleMapState, roomPlayers?: Record<string, any>) => {
+  if (!worldData || !mapState || mapState.players.length === 0) return '';
+
+  let context = 'BATTLE MAP STATE:\n';
+  for (const player of mapState.players) {
+    const location = getWorldLocationById(worldData, player.locationId);
+    const playerName = roomPlayers?.[player.id]?.character?.name || player.name;
+    context += `- ${playerName} is at ${location?.name || player.locationId}. Connected routes: ${(location?.connections || []).join(', ') || 'none'}.\n`;
+  }
+
+  if (mapState.players.length >= 2) {
+    for (let index = 0; index < mapState.players.length; index += 1) {
+      for (let innerIndex = index + 1; innerIndex < mapState.players.length; innerIndex += 1) {
+        const left = mapState.players[index];
+        const right = mapState.players[innerIndex];
+        const distance = getLocationHopDistance(worldData, left.locationId, right.locationId);
+        const leftName = roomPlayers?.[left.id]?.character?.name || left.name;
+        const rightName = roomPlayers?.[right.id]?.character?.name || right.name;
+        const distanceLabel = distance === 0
+          ? 'sharing the same location'
+          : distance === 1
+            ? 'one move apart'
+            : Number.isFinite(distance)
+              ? `${distance} moves apart`
+              : 'positionally disconnected';
+        context += `- ${leftName} and ${rightName} are ${distanceLabel}.\n`;
+      }
+    }
+  }
+
+  context += '\nARENA MOVEMENT RULES:\n';
+  context += '- Current map locations are authoritative. Any minimap repositioning already happened before this turn resolves.\n';
+  context += '- If fighters share a location, melee, grapples, and close-range attacks can connect normally.\n';
+  context += '- If fighters are one move apart, melee must spend the turn closing distance or chasing before it can land. Ranged pressure and spells may still connect with positioning tradeoffs.\n';
+  context += '- If fighters are two or more moves apart, melee cannot land this turn unless the action is entirely about pursuit. Favor ranged attacks, traps, mobility, scouting, or escape.\n';
+  context += '- Use chase, flee, pursuit, and terrain-aware narration naturally in the resolution.\n';
+
+  return context;
+};
+
 const EMPTY_BATTLE_MAP_STATE: BattleMapState = {
   discoveredLocations: [],
   players: [],
@@ -779,12 +846,14 @@ export default function App() {
       const fullLogText = cleanLogs.join('\n\n');
       const logLines = fullLogText.split('\n');
       const totalLines = logLines.length;
+      const battleMapContext = buildBattleMapContext(worldDataRef.current, currentRoom.mapState, currentRoom.players);
 
       const botPrompt = `
 DIFFICULTY: ${currentRoom.botDifficulty}
 YOU ARE PLAYING AS: ${p2Data.character.name}
 YOUR STATE: ${JSON.stringify(p2Data.character)}
 OPPONENT STATE: ${JSON.stringify(p1Data.character)}
+    ${battleMapContext ? `${battleMapContext}\n` : ''}
 LATEST BATTLE EVENTS:
 ${totalLines > 0 ? logLines.slice(Math.max(0, totalLines - 15)).join('\n') : "The battle has just begun."}
 
@@ -912,6 +981,10 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       syncBattleMapState(data);
     });
 
+    socket.on('battleMapMovementLog', (data: { log: string }) => {
+      setBattleLogs(prev => appendBattleLogIfMissing(prev, data.log));
+    });
+
     socket.on('typingStatusUpdated', (data: { context: 'room' | 'exploration'; typingIds: string[] }) => {
       if (data.context === 'room') {
         setRoomTypingIds(data.typingIds || []);
@@ -977,6 +1050,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         const pData = room.players[pid];
         prompt += `Player (${pData.character.name}):\nHP: ${pData.character.hp}, Mana: ${pData.character.mana}\nAction: ${pData.action}\n\n`;
       }
+      prompt += buildBattleMapContext(worldDataRef.current, room.mapState, room.players);
       prompt += `The battle log currently has ${totalLines} lines. You can use the read_battle_history tool to read it if you need context from previous turns. Otherwise, resolve the turn simultaneously.`;
 
       const readBattleHistory = {
@@ -1338,6 +1412,29 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     });
 
     socket.on('explorationPlayersUpdated', (players) => {
+      const selfPlayer = (players || []).find((entry: WorldPlayer) => entry.id === socket.id);
+      if (selfPlayer) {
+        setExplorationState(prev => {
+          if (prev.locationId === selfPlayer.locationId && prev.x === selfPlayer.x && prev.y === selfPlayer.y) {
+            return prev;
+          }
+
+          const discoveredLocations = new Set(prev.discoveredLocations);
+          discoveredLocations.add(selfPlayer.locationId);
+          const location = worldDataRef.current?.locations?.find((entry: WorldLocation) => entry.id === selfPlayer.locationId);
+          for (const connectionId of location?.connections || []) {
+            discoveredLocations.add(connectionId);
+          }
+
+          return {
+            ...prev,
+            locationId: selfPlayer.locationId,
+            x: selfPlayer.x,
+            y: selfPlayer.y,
+            discoveredLocations: Array.from(discoveredLocations),
+          };
+        });
+      }
       mergeWorldPlayers(players || []);
     });
 
@@ -1597,6 +1694,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       socket.off('roomPlayersUpdated');
       socket.off('matchFound');
       socket.off('battleMapStateUpdated');
+      socket.off('battleMapMovementLog');
       socket.off('battleActionsSubmitted');
       socket.off('typingStatusUpdated');
       socket.off('playerLockedIn');
@@ -1966,7 +2064,6 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       } : player),
       npcs: battleMapState.npcs,
     });
-    setBattleLogs(prev => appendBattleLogIfMissing(prev, `🗺️ **You reposition to ${location.name}.**`));
     socket.emit('battleMoveToLocation', { roomId, locationId });
   };
 
@@ -2903,6 +3000,12 @@ Be creative and concise.`;
   };
 
   const renderBattle = () => {
+    const currentBattleLocationId = battleMapState.players.find(player => player.id === socket.id)?.locationId;
+    const currentBattleLocation = getWorldLocationById(worldData, currentBattleLocationId);
+    const battleConnectedLocations = (currentBattleLocation?.connections || [])
+      .map((locationId: string) => getWorldLocationById(worldData, locationId))
+      .filter(Boolean) as WorldLocation[];
+
     return (
       <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -2910,6 +3013,20 @@ Be creative and concise.`;
             <h1 className="text-2xl font-black text-duo-text">{explorationCombatReturn && getCurrentLocation()?.name ? `⚔️ ${getCurrentLocation()?.name}` : 'The Battle'}</h1>
             {renderMinimap()}
           </div>
+          {battleConnectedLocations.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {battleConnectedLocations.map(location => (
+                <button
+                  key={location.id}
+                  onClick={() => handleBattleMapMove(location.id)}
+                  disabled={isLockedIn}
+                  className="text-[10px] font-bold bg-duo-blue/10 text-duo-blue border border-duo-blue/20 rounded-lg px-2 py-1 hover:bg-duo-blue/20 transition-colors disabled:opacity-50"
+                >
+                  ↔ {location.name}
+                </button>
+              ))}
+            </div>
+          )}
           {battleLogs.map((log, i) => {
             const isStreamingThoughts = log.startsWith(BATTLE_STREAM_THOUGHTS_PREFIX);
             const isStreamingAnswer = log.startsWith(BATTLE_STREAM_ANSWER_PREFIX);
