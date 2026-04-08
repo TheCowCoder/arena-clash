@@ -1,0 +1,726 @@
+{
+  "meta": {
+    "name": "The Shattered Isles",
+    "description": "A chain of volcanic islands scattered across an emerald sea, each hiding ancient secrets and warring tribes.",
+    "gridSize": { "width": 60, "height": 60 },
+    "spawnPoints": [
+      { "x": 8, "y": 13, "locationId": "driftwood_beach" },
+      { "x": 30, "y": 25, "locationId": "coral_clearing" },
+      { "x": 42, "y": 48, "locationId": "ashen_shore" },
+      { "x": 12, "y": 43, "locationId": "misty_grove" }
+    ]
+  },
+  "islands": [
+    {
+      "id": "verdant_isle",
+      "name": "Verdant Isle",
+      "description": "A lush tropical island covered in dense jungle. The largest of the Shattered Isles.",
+      "bounds": { "x": 1, "y": 2, "width": 14, "height": 12 },
+      "biome": "tropical_jungle"
+    },
+    {
+      "id": "coral_atoll",
+      "name": "Coral Atoll",
+      "description": "A ring of coral formations surrounding a shallow lagoon. Sea creatures and traders gather here.",
+      "bounds": { "x": 20, "y": 14, "width": 12, "height": 12 },
+      "biome": "coral_reef"
+    },
+    {
+      "id": "obsidian_peaks",
+      "name": "Obsidian Peaks",
+      "description": "Jagged volcanic mountains still smoking with geothermal activity. Rich in rare minerals.",
+      "bounds": { "x": 42, "y": 38, "width": 14, "height": 12 },
+      "biome": "volcanic"
+    },
+    {
+      "id": "mistwood_isle",
+      "name": "Mistwood Isle",
+      "description": "A fog-shrouded island of ancient twisted trees. Strange whispers echo through the mist.",
+      "bounds": { "x": 1, "y": 38, "width": 14, "height": 12 },
+      "biome": "enchanted_forest"
+    },
+    {
+      "id": "sun_reef",
+      "name": "Sun Reef",
+      "description": "Shallow sun-bleached coral platforms that form natural bridges between islands.",
+      "bounds": { "x": 22, "y": 30, "width": 12, "height": 8 },
+      "biome": "reef_bridges"
+    },
+    {
+      "id": "skyspire_island",
+      "name": "Skyspire Island",
+      "description": "A solitary peak rising impossibly high, its summit often hidden in clouds. The ancients built a temple at its peak.",
+      "bounds": { "x": 46, "y": 1, "width": 13, "height": 10 },
+      "biome": "mountain"
+    },
+    {
+      "id": "tide_flats",
+      "name": "Tide Flats",
+      "description": "Vast shallow salt flats that appear and disappear with the tides. Treacherous but rich in shellfish.",
+      "bounds": { "x": 18, "y": 0, "width": 12, "height": 8 },
+      "biome": "salt_flats"
+    },
+    {
+      "id": "ember_chain",
+      "name": "Ember Chain",
+      "description": "A series of small volcanic islets connected by lava bridges. Home to fire tribes.",
+      "bounds": { "x": 36, "y": 18, "width": 10, "height": 10 },
+      "biome": "volcanic"
+    }
+  ],
+  "locations": [
+    {
+      "id": "driftwood_beach",
+      "name": "Driftwood Beach",
+      "description": "A serene beach littered with weathered driftwood and sea glass. The gentle waves bring treasures from distant lands.",
+      "x": 8, "y": 13,
+      "islandId": "verdant_isle",
+      "type": "beach",
+      "resources": ["driftwood", "sea_glass", "coconut", "fresh_water"],
+      "connections": ["jungle_path", "fishing_cove"],
+      "npcs": [],
+      "enemies": []
+    },
+    {
+      "id": "jungle_path",
+      "name": "Jungle Path",
+      "description": "A narrow winding trail through dense tropical foliage. Colorful birds call from the canopy above.",
+      "x": 2, "y": 8,
+      "islandId": "verdant_isle",
+      "type": "trail",
+      "resources": ["vine", "tropical_fruit", "medicinal_herb"],
+      "connections": ["driftwood_beach", "village_of_tides", "ancient_ruins"],
+      "npcs": [],
+      "enemies": ["jungle_spider"]
+    },
+    {
+      "id": "village_of_tides",
+      "name": "Village of Tides",
+      "description": "A bustling village built on stilts over the shallows. The Tide Tribe trades fish and pearls here.",
+      "x": 8, "y": 8,
+      "islandId": "verdant_isle",
+      "type": "village",
+      "resources": ["fish", "pearl", "rope", "fresh_water"],
+      "connections": ["jungle_path", "tribal_elder_hut", "market_square"],
+      "npcs": ["elder_kai"],
+      "enemies": []
+    },
+    {
+      "id": "tribal_elder_hut",
+      "name": "Elder Kai's Hut",
+      "description": "A large wooden hut decorated with shells and bones. Smoke rises from incense burners within.",
+      "x": 13, "y": 3,
+      "islandId": "verdant_isle",
+      "type": "building",
+      "resources": [],
+      "connections": ["village_of_tides"],
+      "npcs": ["elder_kai"],
+      "enemies": []
+    },
+    {
+      "id": "market_square",
+      "name": "Market Square",
+      "description": "A lively open-air market where merchants hawk wares from across the isles. You can trade resources here.",
+      "x": 13, "y": 8,
+      "islandId": "verdant_isle",
+      "type": "market",
+      "resources": [],
+      "connections": ["village_of_tides", "harbor"],
+      "npcs": ["merchant_lira"],
+      "enemies": []
+    },
+    {
+      "id": "harbor",
+      "name": "Verdant Harbor",
+      "description": "Small wooden docks where fishing boats and rafts are moored. Some brave sailors offer passage between islands.",
+      "x": 13, "y": 13,
+      "islandId": "verdant_isle",
+      "type": "harbor",
+      "resources": ["rope", "fish"],
+      "connections": ["market_square", "coral_clearing", "tide_crossing"],
+      "npcs": ["captain_rook"],
+      "enemies": []
+    },
+    {
+      "id": "ancient_ruins",
+      "name": "Ancient Ruins",
+      "description": "Crumbling stone pillars and overgrown temples from a forgotten civilization. Strange glyphs glow faintly at night.",
+      "x": 8, "y": 3,
+      "islandId": "verdant_isle",
+      "type": "ruins",
+      "resources": ["ancient_stone", "glyph_fragment"],
+      "connections": ["jungle_path", "hidden_cave"],
+      "npcs": [],
+      "enemies": ["stone_guardian"]
+    },
+    {
+      "id": "hidden_cave",
+      "name": "Hidden Cave",
+      "description": "A concealed cave behind a waterfall. Inside, pools of luminescent water cast an eerie blue glow.",
+      "x": 2, "y": 3,
+      "islandId": "verdant_isle",
+      "type": "cave",
+      "resources": ["glowstone", "crystal_shard", "fresh_water"],
+      "connections": ["ancient_ruins"],
+      "npcs": ["hermit_zara"],
+      "enemies": ["cave_bat"]
+    },
+    {
+      "id": "fishing_cove",
+      "name": "Fishing Cove",
+      "description": "A sheltered cove with calm clear water. Schools of fish dart through coral below.",
+      "x": 2, "y": 13,
+      "islandId": "verdant_isle",
+      "type": "cove",
+      "resources": ["fish", "coral", "seaweed", "fresh_water"],
+      "connections": ["driftwood_beach"],
+      "npcs": [],
+      "enemies": []
+    },
+    {
+      "id": "coral_clearing",
+      "name": "Coral Clearing",
+      "description": "A natural clearing formed by massive brain corals. Crystal-clear tidal pools teem with colorful life.",
+      "x": 30, "y": 25,
+      "islandId": "coral_atoll",
+      "type": "clearing",
+      "resources": ["coral", "pearl", "sea_cucumber", "fresh_water"],
+      "connections": ["harbor", "lagoon_village", "reef_bridge_north"],
+      "npcs": [],
+      "enemies": []
+    },
+    {
+      "id": "lagoon_village",
+      "name": "Lagoon Village",
+      "description": "The Coral Tribe's underwater-adjacent settlement. Homes are half-submerged and decorated with living coral.",
+      "x": 24, "y": 20,
+      "islandId": "coral_atoll",
+      "type": "village",
+      "resources": ["fish", "pearl", "kelp"],
+      "connections": ["coral_clearing", "coral_throne", "deep_pools"],
+      "npcs": ["chief_maren", "coral_smith"],
+      "enemies": []
+    },
+    {
+      "id": "coral_throne",
+      "name": "Coral Throne",
+      "description": "A magnificent throne carved from a single giant coral formation. Chief Maren holds court here.",
+      "x": 30, "y": 18,
+      "islandId": "coral_atoll",
+      "type": "landmark",
+      "resources": [],
+      "connections": ["lagoon_village"],
+      "npcs": ["chief_maren"],
+      "enemies": []
+    },
+    {
+      "id": "deep_pools",
+      "name": "Deep Pools",
+      "description": "Dark bottomless pools where strange creatures lurk. The coral tribe avoids this place after dark.",
+      "x": 26, "y": 24,
+      "islandId": "coral_atoll",
+      "type": "danger_zone",
+      "resources": ["deep_pearl", "abyss_coral"],
+      "connections": ["lagoon_village"],
+      "npcs": [],
+      "enemies": ["abyssal_eel", "depth_lurker"]
+    },
+    {
+      "id": "reef_bridge_north",
+      "name": "Reef Bridge North",
+      "description": "A natural coral bridge connecting the Coral Atoll to the Sun Reef. Treacherous when waves are high.",
+      "x": 28, "y": 30,
+      "islandId": "sun_reef",
+      "type": "bridge",
+      "resources": [],
+      "connections": ["coral_clearing", "sun_platform"],
+      "npcs": [],
+      "enemies": []
+    },
+    {
+      "id": "sun_platform",
+      "name": "Sun Platform",
+      "description": "A flat, sun-bleached coral platform perfect for resting. Warm sea breezes carry the scent of salt.",
+      "x": 22, "y": 36,
+      "islandId": "sun_reef",
+      "type": "rest_area",
+      "resources": ["dried_coral", "salt"],
+      "connections": ["reef_bridge_north", "ember_crossing"],
+      "npcs": [],
+      "enemies": []
+    },
+    {
+      "id": "ember_crossing",
+      "name": "Ember Crossing",
+      "description": "Where the cool reef meets the hot volcanic rock. Steam rises where waves hit lava stone.",
+      "x": 36, "y": 25,
+      "islandId": "ember_chain",
+      "type": "transition",
+      "resources": ["obsidian_shard", "sulfur"],
+      "connections": ["sun_platform", "fire_tribe_camp", "lava_bridge"],
+      "npcs": [],
+      "enemies": ["lava_crab"]
+    },
+    {
+      "id": "fire_tribe_camp",
+      "name": "Fire Tribe Camp",
+      "description": "A fortified encampment built from volcanic rock. The Fire Tribe forges weapons in natural lava flows.",
+      "x": 40, "y": 19,
+      "islandId": "ember_chain",
+      "type": "village",
+      "resources": ["iron_ore", "obsidian_shard"],
+      "connections": ["ember_crossing", "forge_master"],
+      "npcs": ["warchief_kael", "forge_master_hilda"],
+      "enemies": []
+    },
+    {
+      "id": "forge_master",
+      "name": "Hilda's Forge",
+      "description": "A massive open-air forge using natural lava channels as furnaces. The heat is nearly unbearable.",
+      "x": 45, "y": 19,
+      "islandId": "ember_chain",
+      "type": "forge",
+      "resources": [],
+      "connections": ["fire_tribe_camp"],
+      "npcs": ["forge_master_hilda"],
+      "enemies": []
+    },
+    {
+      "id": "lava_bridge",
+      "name": "Lava Bridge",
+      "description": "A narrow bridge of cooled lava connecting to the Obsidian Peaks. Glowing cracks hint at the molten river below.",
+      "x": 42, "y": 27,
+      "islandId": "ember_chain",
+      "type": "bridge",
+      "resources": [],
+      "connections": ["ember_crossing", "sulfur_springs"],
+      "npcs": [],
+      "enemies": ["fire_elemental"]
+    },
+    {
+      "id": "sulfur_springs",
+      "name": "Sulfur Springs",
+      "description": "Bubbling hot springs with medicinal properties. The air is thick with sulfurous steam.",
+      "x": 42, "y": 42,
+      "islandId": "obsidian_peaks",
+      "type": "springs",
+      "resources": ["sulfur", "hot_spring_water", "medicinal_mud"],
+      "connections": ["lava_bridge", "obsidian_mine", "peak_trail"],
+      "npcs": [],
+      "enemies": []
+    },
+    {
+      "id": "obsidian_mine",
+      "name": "Obsidian Mine",
+      "description": "Deep tunnels carved into volcanic glass. Precious minerals glitter in torchlight.",
+      "x": 48, "y": 38,
+      "islandId": "obsidian_peaks",
+      "type": "mine",
+      "resources": ["obsidian", "raw_gem", "iron_ore"],
+      "connections": ["sulfur_springs"],
+      "npcs": [],
+      "enemies": ["rock_golem", "mine_spider"]
+    },
+    {
+      "id": "peak_trail",
+      "name": "Peak Trail",
+      "description": "A dangerous winding path up the main volcanic peak. The view expands with every step.",
+      "x": 54, "y": 38,
+      "islandId": "obsidian_peaks",
+      "type": "trail",
+      "resources": ["volcanic_rock", "eagle_feather"],
+      "connections": ["sulfur_springs", "volcano_summit"],
+      "npcs": [],
+      "enemies": ["mountain_drake"]
+    },
+    {
+      "id": "volcano_summit",
+      "name": "Volcano Summit",
+      "description": "The burning heart of Obsidian Peaks. A lava lake churns below, and the heat distorts the air.",
+      "x": 54, "y": 44,
+      "islandId": "obsidian_peaks",
+      "type": "landmark",
+      "resources": ["dragon_glass", "fire_crystal"],
+      "connections": ["peak_trail"],
+      "npcs": [],
+      "enemies": ["volcanic_wyrm"]
+    },
+    {
+      "id": "ashen_shore",
+      "name": "Ashen Shore",
+      "description": "A black sand beach on the edge of Obsidian Peaks. Ash falls like snow from the smoking mountain.",
+      "x": 42, "y": 48,
+      "islandId": "obsidian_peaks",
+      "type": "beach",
+      "resources": ["volcanic_sand", "driftwood", "obsidian_shard"],
+      "connections": ["sulfur_springs", "peak_trail"],
+      "npcs": [],
+      "enemies": []
+    },
+    {
+      "id": "misty_grove",
+      "name": "Misty Grove",
+      "description": "An ancient grove where twisted trees form natural archways. Bioluminescent fungi light the way.",
+      "x": 12, "y": 43,
+      "islandId": "mistwood_isle",
+      "type": "forest",
+      "resources": ["glowshroom", "ancient_bark", "moonberry", "fresh_water"],
+      "connections": ["whispering_path", "witch_hollow"],
+      "npcs": [],
+      "enemies": ["shadow_wisp"]
+    },
+    {
+      "id": "whispering_path",
+      "name": "Whispering Path",
+      "description": "A fog-covered trail where voices seem to emerge from the trees themselves. Don't follow them off the path.",
+      "x": 8, "y": 48,
+      "islandId": "mistwood_isle",
+      "type": "trail",
+      "resources": ["spirit_moss", "fog_lily"],
+      "connections": ["misty_grove", "spirit_village"],
+      "npcs": [],
+      "enemies": ["mist_wraith"]
+    },
+    {
+      "id": "spirit_village",
+      "name": "Spirit Village",
+      "description": "The Spirit Tribe lives in harmony with the forest spirits. Their homes grow organically from living trees.",
+      "x": 4, "y": 44,
+      "islandId": "mistwood_isle",
+      "type": "village",
+      "resources": ["spirit_sap", "dreamleaf"],
+      "connections": ["whispering_path", "spirit_elder_tree", "moon_lake"],
+      "npcs": ["elder_yew", "spirit_weaver_linn"],
+      "enemies": []
+    },
+    {
+      "id": "spirit_elder_tree",
+      "name": "The Elder Tree",
+      "description": "A colossal tree at the heart of the Spirit Village. It is said to be thousands of years old and sentient.",
+      "x": 3, "y": 40,
+      "islandId": "mistwood_isle",
+      "type": "landmark",
+      "resources": [],
+      "connections": ["spirit_village"],
+      "npcs": ["elder_yew"],
+      "enemies": []
+    },
+    {
+      "id": "moon_lake",
+      "name": "Moon Lake",
+      "description": "A perfectly still lake that reflects the moon even during the day. Its waters have healing properties.",
+      "x": 4, "y": 49,
+      "islandId": "mistwood_isle",
+      "type": "lake",
+      "resources": ["moon_water", "silver_fish", "lotus"],
+      "connections": ["spirit_village", "tide_crossing"],
+      "npcs": [],
+      "enemies": ["lake_serpent"]
+    },
+    {
+      "id": "witch_hollow",
+      "name": "Witch Hollow",
+      "description": "A dark depression in the forest where an exiled witch brews potions from exotic ingredients.",
+      "x": 7, "y": 39,
+      "islandId": "mistwood_isle",
+      "type": "dwelling",
+      "resources": [],
+      "connections": ["misty_grove"],
+      "npcs": ["witch_morga"],
+      "enemies": []
+    },
+    {
+      "id": "tide_crossing",
+      "name": "Tide Crossing",
+      "description": "A treacherous path of exposed seabed connecting multiple islands. Passable at low tide, with a sea channel leading to Mistwood Isle's Moon Lake.",
+      "x": 20, "y": 5,
+      "islandId": "tide_flats",
+      "type": "crossing",
+      "resources": ["shellfish", "sea_salt"],
+      "connections": ["harbor", "salt_field", "moon_lake"],
+      "npcs": [],
+      "enemies": ["tide_crab"]
+    },
+    {
+      "id": "salt_field",
+      "name": "Salt Fields",
+      "description": "Vast expanses of crystallized salt that crunch underfoot. Mirages dance on the horizon.",
+      "x": 24, "y": 3,
+      "islandId": "tide_flats",
+      "type": "field",
+      "resources": ["sea_salt", "brine_shrimp"],
+      "connections": ["tide_crossing", "traders_rest"],
+      "npcs": [],
+      "enemies": ["salt_scorpion"]
+    },
+    {
+      "id": "traders_rest",
+      "name": "Trader's Rest",
+      "description": "A waystation built on wooden platforms above the salt flats. Traveling merchants rest here between islands.",
+      "x": 28, "y": 6,
+      "islandId": "tide_flats",
+      "type": "waystation",
+      "resources": [],
+      "connections": ["salt_field", "skyspire_approach"],
+      "npcs": ["wandering_merchant_ori"],
+      "enemies": []
+    },
+    {
+      "id": "skyspire_approach",
+      "name": "Skyspire Approach",
+      "description": "The base of the impossibly tall Skyspire mountain. Ancient carved steps spiral upward into the clouds.",
+      "x": 46, "y": 9,
+      "islandId": "skyspire_island",
+      "type": "mountain_base",
+      "resources": ["mountain_herb", "climbing_vine"],
+      "connections": ["traders_rest", "cloud_stairway"],
+      "npcs": [],
+      "enemies": ["wind_elemental"]
+    },
+    {
+      "id": "cloud_stairway",
+      "name": "Cloud Stairway",
+      "description": "Ancient stone steps disappearing into the clouds. The wind howls and the air grows thin.",
+      "x": 52, "y": 5,
+      "islandId": "skyspire_island",
+      "type": "stairway",
+      "resources": ["cloud_condensation"],
+      "connections": ["skyspire_approach", "sky_temple"],
+      "npcs": [],
+      "enemies": ["sky_hawk", "wind_elemental"]
+    },
+    {
+      "id": "sky_temple",
+      "name": "Sky Temple",
+      "description": "An ancient temple at the peak of Skyspire. The clouds part here, revealing a breathtaking view of all the Shattered Isles.",
+      "x": 58, "y": 1,
+      "islandId": "skyspire_island",
+      "type": "temple",
+      "resources": ["sky_crystal", "ancient_scroll"],
+      "connections": ["cloud_stairway"],
+      "npcs": ["temple_keeper_aeon"],
+      "enemies": []
+    }
+  ],
+  "npcs": {
+    "elder_kai": {
+      "id": "elder_kai",
+      "name": "Elder Kai",
+      "locationId": "village_of_tides",
+      "role": "quest_giver",
+      "profileMarkdown": "# Elder Kai\n\n**Role:** Tribal Elder of the Tide Tribe\n\n**Appearance:** An ancient weathered fisherman with sun-darkened skin, a long white beard braided with shells, and deep knowing eyes.\n\n### Personality\n- Wise and patient, speaks in metaphors drawn from the sea\n- Protective of the tribe, suspicious of outsiders until trust is earned\n- Knows the history of the Shattered Isles\n\n### Abilities\n- **Tidal Wisdom**: Can read the tides and predict weather\n- **Sea's Blessing**: Grants buffs to those who complete his tasks\n\n### Inventory\n- **Tide Staff**: A gnarled staff topped with a perfect pearl\n- **Map Fragment**: Part of an ancient map of the Isles\n- **Healing Kelp**: Restores 20 HP when consumed"
+    },
+    "merchant_lira": {
+      "id": "merchant_lira",
+      "name": "Merchant Lira",
+      "locationId": "market_square",
+      "role": "trader",
+      "profileMarkdown": "# Merchant Lira\n\n**Role:** Traveling Merchant\n\n**Appearance:** A sharp-eyed woman with colorful scarves and jingling jewelry. Her cart is overflowing with exotic goods.\n\n### Personality\n- Shrewd businesswoman who always seeks a deal\n- Friendly but never gives anything for free\n- Has connections across all the islands\n\n### Trade Goods\n| Item | Cost |\n|:---|:---|\n| Health Potion | 3 fish + 1 herb |\n| Rope | 2 vine + 1 driftwood |\n| Iron Dagger | 2 iron_ore + 1 obsidian_shard |\n| Map Fragment | 5 pearl |"
+    },
+    "captain_rook": {
+      "id": "captain_rook",
+      "name": "Captain Rook",
+      "locationId": "harbor",
+      "role": "transport",
+      "profileMarkdown": "# Captain Rook\n\n**Role:** Sea Captain & Ferry Service\n\n**Appearance:** A muscular sailor with a parrot on his shoulder and a missing tooth that he's proud of.\n\n### Personality\n- Boisterous and loves telling tall tales\n- Will transport players between island harbors\n- Charges a fee in resources\n\n### Services\n- **Island Ferry**: Transport between harbors (costs 2 fish per trip)\n- **Sea Stories**: Gives hints about hidden locations"
+    },
+    "hermit_zara": {
+      "id": "hermit_zara",
+      "name": "Hermit Zara",
+      "locationId": "hidden_cave",
+      "role": "mystic",
+      "profileMarkdown": "# Hermit Zara\n\n**Role:** Cave-Dwelling Mystic\n\n**Appearance:** A gaunt figure wrapped in glowing moss, with eyes that seem to see beyond the physical realm.\n\n### Personality\n- Speaks in riddles and cryptic prophecies\n- Studies the ancient glyphs found in the ruins\n- Will teach abilities to worthy adventurers\n\n### Abilities\n- **Glyph Reading**: Can decode ancient inscriptions\n- **Crystal Scrying**: Can reveal hidden locations on the map\n\n### Teaching\n- Will teach the player a random ability if they bring 3 glyph_fragments"
+    },
+    "chief_maren": {
+      "id": "chief_maren",
+      "name": "Chief Maren",
+      "locationId": "lagoon_village",
+      "role": "quest_giver",
+      "profileMarkdown": "# Chief Maren\n\n**Role:** Chief of the Coral Tribe\n\n**Appearance:** A tall, regal woman with bioluminescent tattoos and armor made of living coral.\n\n### Personality\n- Stern but fair leader\n- Concerned about the Deep Pools creatures growing bolder\n- Respects strength and cunning\n\n### Quest Line\n1. Prove yourself by diving into the Deep Pools\n2. Retrieve the stolen Coral Heart\n3. Forge an alliance between the Coral and Tide tribes"
+    },
+    "coral_smith": {
+      "id": "coral_smith",
+      "name": "Coral Smith",
+      "locationId": "lagoon_village",
+      "role": "crafter",
+      "profileMarkdown": "# Coral Smith\n\n**Role:** Weapon & Armor Crafter\n\n**Appearance:** A quiet artisan whose hands are permanently stained with coral pigments.\n\n### Crafting Recipes\n| Item | Materials |\n|:---|:---|\n| Coral Blade | 3 coral + 1 deep_pearl |\n| Reef Shield | 5 coral + 2 kelp |\n| Pearl Amulet | 2 pearl + 1 crystal_shard |"
+    },
+    "warchief_kael": {
+      "id": "warchief_kael",
+      "name": "Warchief Kael",
+      "locationId": "fire_tribe_camp",
+      "role": "quest_giver",
+      "profileMarkdown": "# Warchief Kael\n\n**Role:** Warchief of the Fire Tribe\n\n**Appearance:** A massive warrior covered in burn scars and tribal tattoos. His armor glows with embedded embers.\n\n### Personality\n- Values strength and combat prowess above all\n- Will challenge visitors to prove their worth\n- Secretly fears the volcanic wyrm at the summit\n\n### Abilities\n- **Ember Fist**: Devastating fire-enhanced melee attacks\n- **War Cry**: Buffs all Fire Tribe warriors\n\n### Quest Line\n1. Defeat three of his warriors in combat\n2. Retrieve obsidian from the mine\n3. Slay the Volcanic Wyrm"
+    },
+    "forge_master_hilda": {
+      "id": "forge_master_hilda",
+      "name": "Forge Master Hilda",
+      "locationId": "forge_master",
+      "role": "crafter",
+      "profileMarkdown": "# Forge Master Hilda\n\n**Role:** Master Blacksmith of the Fire Tribe\n\n**Appearance:** A stout, soot-covered woman with arms like tree trunks and eyes that burn like coals.\n\n### Crafting Recipes\n| Item | Materials |\n|:---|:---|\n| Obsidian Sword | 3 obsidian + 2 iron_ore |\n| Volcanic Armor | 5 obsidian + 1 fire_crystal |\n| Ember Shield | 2 obsidian_shard + 3 iron_ore |"
+    },
+    "elder_yew": {
+      "id": "elder_yew",
+      "name": "Elder Yew",
+      "locationId": "spirit_village",
+      "role": "quest_giver",
+      "profileMarkdown": "# Elder Yew\n\n**Role:** Spiritual Leader of the Spirit Tribe\n\n**Appearance:** An impossibly old figure who seems to be partially made of wood. Leaves grow from their hair.\n\n### Personality\n- Speaks slowly and deliberately\n- Connected to the forest on a spiritual level\n- Tasks visitors with restoring balance to the isle\n\n### Abilities\n- **Nature's Voice**: Can communicate with plants and animals\n- **Root Walk**: Can teleport between ancient trees"
+    },
+    "spirit_weaver_linn": {
+      "id": "spirit_weaver_linn",
+      "name": "Spirit Weaver Linn",
+      "locationId": "spirit_village",
+      "role": "crafter",
+      "profileMarkdown": "# Spirit Weaver Linn\n\n**Role:** Enchantress & Crafter\n\n**Appearance:** A young woman with flowers woven into her hair and fingers that trail luminescent threads.\n\n### Crafting Recipes\n| Item | Materials |\n|:---|:---|\n| Spirit Cloak | 3 spirit_moss + 2 dreamleaf |\n| Moon Tonic | 1 moon_water + 2 moonberry |\n| Glow Lantern | 2 glowshroom + 1 glowstone |"
+    },
+    "witch_morga": {
+      "id": "witch_morga",
+      "name": "Witch Morga",
+      "locationId": "witch_hollow",
+      "role": "mystic",
+      "profileMarkdown": "# Witch Morga\n\n**Role:** Exiled Witch & Potion Brewer\n\n**Appearance:** A hunched old woman with a cackling laugh and a cauldron that never stops bubbling.\n\n### Personality\n- Mischievous and unpredictable\n- Exiled from the Spirit Tribe for forbidden experiments\n- Will trade powerful potions for rare ingredients\n\n### Potions\n| Potion | Cost | Effect |\n|:---|:---|:---|\n| Berserker Brew | 3 glowshroom + 1 sulfur | +30 ATK, -20 DEF for 3 turns |\n| Shadow Veil | 2 spirit_moss + 1 fog_lily | Invisibility for 1 turn |\n| Giant's Strength | 1 ancient_bark + 2 moonberry | +50 STR for 2 turns |"
+    },
+    "wandering_merchant_ori": {
+      "id": "wandering_merchant_ori",
+      "name": "Wandering Merchant Ori",
+      "locationId": "traders_rest",
+      "role": "trader",
+      "profileMarkdown": "# Wandering Merchant Ori\n\n**Role:** Traveling Merchant\n\n**Appearance:** A mysteriously cloaked figure with a hovering backpack that seems to contain infinite items.\n\n### Personality\n- Never reveals their face\n- Knows information about every island\n- Prices are fair but non-negotiable\n\n### Trade Goods\n| Item | Cost |\n|:---|:---|\n| Map of the Isles | 5 sea_salt + 3 pearl |\n| Climbing Gear | 4 rope + 2 iron_ore |\n| Fire Resistance Potion | 2 sulfur + 1 moon_water |"
+    },
+    "temple_keeper_aeon": {
+      "id": "temple_keeper_aeon",
+      "name": "Temple Keeper Aeon",
+      "locationId": "sky_temple",
+      "role": "quest_giver",
+      "profileMarkdown": "# Temple Keeper Aeon\n\n**Role:** Guardian of the Sky Temple\n\n**Appearance:** An ethereal being of light and wind, barely corporeal. Their voice echoes from everywhere at once.\n\n### Personality\n- Ancient beyond measure, remembers the world before the Shattering\n- Speaks in profound truths\n- Guards the final secret of the Shattered Isles\n\n### Abilities\n- **Wind Command**: Controls wind and weather across all islands\n- **Time Glimpse**: Can show visions of past and future\n\n### Quest\n- The Final Quest: Collect artifacts from all four tribes to unlock the Temple's inner sanctum"
+    }
+  },
+  "enemies": {
+    "jungle_spider": {
+      "name": "Jungle Spider",
+      "hp": 30,
+      "damage": 8,
+      "description": "A dog-sized spider with venomous fangs and camouflaged hide.",
+      "loot": ["spider_silk", "venom_gland"]
+    },
+    "stone_guardian": {
+      "name": "Stone Guardian",
+      "hp": 80,
+      "damage": 15,
+      "description": "An animated stone statue from the ancient ruins. Slow but devastating.",
+      "loot": ["ancient_stone", "glyph_fragment", "guardian_core"]
+    },
+    "cave_bat": {
+      "name": "Cave Bat",
+      "hp": 15,
+      "damage": 5,
+      "description": "A large bat with glowing eyes that hunts in the dark.",
+      "loot": ["bat_wing", "echo_crystal"]
+    },
+    "abyssal_eel": {
+      "name": "Abyssal Eel",
+      "hp": 50,
+      "damage": 12,
+      "description": "A monstrous electric eel from the deep pools. Shocks anything that comes near.",
+      "loot": ["shock_fin", "deep_pearl"]
+    },
+    "depth_lurker": {
+      "name": "Depth Lurker",
+      "hp": 100,
+      "damage": 20,
+      "description": "A tentacled horror from the ocean depths. Few survive an encounter.",
+      "loot": ["lurker_tentacle", "abyss_coral", "dark_pearl"]
+    },
+    "lava_crab": {
+      "name": "Lava Crab",
+      "hp": 40,
+      "damage": 10,
+      "description": "A crab with a shell of cooled lava. Its pincers glow red-hot.",
+      "loot": ["lava_shell", "obsidian_shard"]
+    },
+    "fire_elemental": {
+      "name": "Fire Elemental",
+      "hp": 70,
+      "damage": 18,
+      "description": "A living flame that patrols the lava bridges. Immune to fire.",
+      "loot": ["fire_crystal", "ember_core"]
+    },
+    "rock_golem": {
+      "name": "Rock Golem",
+      "hp": 90,
+      "damage": 14,
+      "description": "A massive golem formed from volcanic rock. Guards the mine tunnels.",
+      "loot": ["iron_ore", "raw_gem", "golem_heart"]
+    },
+    "mine_spider": {
+      "name": "Mine Spider",
+      "hp": 25,
+      "damage": 7,
+      "description": "A crystalline spider that spins webs of mineral thread.",
+      "loot": ["crystal_thread", "raw_gem"]
+    },
+    "mountain_drake": {
+      "name": "Mountain Drake",
+      "hp": 120,
+      "damage": 22,
+      "description": "A young dragon that nests on the volcanic peaks. Breathes superheated air.",
+      "loot": ["drake_scale", "dragon_glass"]
+    },
+    "volcanic_wyrm": {
+      "name": "Volcanic Wyrm",
+      "hp": 200,
+      "damage": 30,
+      "description": "The apex predator of Obsidian Peaks. A colossal serpent of magma and stone.",
+      "loot": ["wyrm_fang", "fire_crystal", "dragon_glass", "volcanic_heart"]
+    },
+    "shadow_wisp": {
+      "name": "Shadow Wisp",
+      "hp": 20,
+      "damage": 8,
+      "description": "A flickering ball of dark energy that drains life force.",
+      "loot": ["shadow_essence", "glowshroom"]
+    },
+    "mist_wraith": {
+      "name": "Mist Wraith",
+      "hp": 60,
+      "damage": 15,
+      "description": "A ghostly figure that emerges from the fog. Its touch chills to the bone.",
+      "loot": ["wraith_cloth", "spirit_moss"]
+    },
+    "lake_serpent": {
+      "name": "Lake Serpent",
+      "hp": 80,
+      "damage": 16,
+      "description": "A long sinuous creature that lurks in Moon Lake's depths.",
+      "loot": ["serpent_scale", "moon_water"]
+    },
+    "tide_crab": {
+      "name": "Tide Crab",
+      "hp": 25,
+      "damage": 6,
+      "description": "A large crab that ambushes travelers on the tide crossings.",
+      "loot": ["crab_shell", "shellfish"]
+    },
+    "salt_scorpion": {
+      "name": "Salt Scorpion",
+      "hp": 35,
+      "damage": 10,
+      "description": "A white scorpion perfectly camouflaged against the salt flats.",
+      "loot": ["scorpion_venom", "sea_salt"]
+    },
+    "wind_elemental": {
+      "name": "Wind Elemental",
+      "hp": 50,
+      "damage": 12,
+      "description": "A swirling vortex of air that guards the Skyspire approach.",
+      "loot": ["wind_essence", "cloud_condensation"]
+    },
+    "sky_hawk": {
+      "name": "Sky Hawk",
+      "hp": 40,
+      "damage": 14,
+      "description": "A massive raptor with razor talons that dives from above.",
+      "loot": ["eagle_feather", "hawk_talon"]
+    }
+  }
+}
