@@ -3096,7 +3096,9 @@ Be creative and concise.`;
     const activeTypingIds = new Set([...roomTypingIds, ...localRoomTypingIds]);
     const remaining = arenaPreparation?.remaining ?? 0;
     const timerLabel = `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}`;
-    const isTweakStage = arenaPreparation?.stage === 'tweak';
+    const hasLocalRewriteAccess = !!(socket.id && players[socket.id]?.prepSkippedPreview);
+    const isTweakStage = arenaPreparation?.stage === 'tweak' || hasLocalRewriteAccess;
+    const isHeadStartRewrite = arenaPreparation?.stage === 'preview' && hasLocalRewriteAccess;
     const isPrepLockedIn = !!(socket.id && players[socket.id]?.lockedIn);
     const previewSkipVotes = arenaPreparation?.skipVotes ?? [];
     const previewParticipantCount = prepPlayers.filter(([, player]) => !player.character?.isNpcAlly).length;
@@ -3109,16 +3111,18 @@ Be creative and concise.`;
             <div>
               <div className="text-[10px] font-black uppercase tracking-[0.2em] text-duo-blue">Arena Preparation</div>
               <h2 className="text-xl font-black text-duo-text mt-1">
-                {isTweakStage ? 'Final Rewrite Window' : 'Study The Opponents'}
+                {isTweakStage ? (isHeadStartRewrite ? 'Head Start Rewrite' : 'Final Rewrite Window') : 'Study The Opponents'}
               </h2>
               <p className="text-xs font-bold text-duo-gray-dark mt-1 max-w-[18rem]">
                 {isTweakStage
-                  ? 'You have one pass to refine your legend before the duel begins.'
+                  ? (isHeadStartRewrite
+                    ? 'You started your rewrite early while the remaining preview countdown continues for anyone still reviewing.'
+                    : 'You have one pass to refine your legend before the duel begins.')
                   : 'Inspect every legend now. The rewrite window opens after the 15 second preview countdown or once everyone skips ahead.'}
               </p>
             </div>
             <div className={`rounded-2xl px-3 py-2 border text-center min-w-[88px] ${isTweakStage ? 'bg-yellow-50 text-yellow-700 border-yellow-200' : 'bg-blue-50 text-duo-blue border-blue-200'}`}>
-              <div className="text-[9px] font-black uppercase">{isTweakStage ? 'Tweak' : 'Preview'}</div>
+              <div className="text-[9px] font-black uppercase">{isTweakStage ? (isHeadStartRewrite ? 'Head Start' : 'Tweak') : 'Preview'}</div>
               <div className="text-lg font-black leading-none mt-1">{timerLabel}</div>
             </div>
           </div>
@@ -3183,11 +3187,11 @@ Be creative and concise.`;
               className="duo-btn duo-btn-blue mt-5 px-5 py-3 disabled:opacity-60"
             >
               {hasRequestedPreviewSkip
-                ? `Waiting to skip (${previewSkipVotes.length}/${previewParticipantCount})`
-                : `Skip to rewrite (${previewSkipVotes.length}/${previewParticipantCount})`}
+                ? `Rewrite unlocked (${previewSkipVotes.length}/${previewParticipantCount})`
+                : `Start rewrite now (${previewSkipVotes.length}/${previewParticipantCount})`}
             </button>
             <p className="text-[11px] font-bold max-w-[22rem] mt-2">
-              The rewrite phase starts immediately once every human player votes to skip the rest of preview.
+              Skipping opens your rewrite phase immediately. Once every human player has skipped, the whole room advances to the shared write stage.
             </p>
           </div>
         ) : (

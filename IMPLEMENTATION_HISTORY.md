@@ -47,8 +47,8 @@ This file summarizes the most recent implemented changes so test planning can ta
 43. Mid-route swimming and pursuit movement now remain visible on the minimap from turn to turn.
 44. Battle map updates now stay authoritative on the server so positions do not snap back next turn.
 45. Arena preview time was shortened from 30 seconds to 15 seconds.
-46. Arena preview can now be skipped early when every human participant votes to skip.
-47. The preview UI now shows skip progress as a vote count.
+46. Any player can now leave preview early and unlock a local head-start rewrite phase.
+47. Once every human player has skipped preview, the whole room advances to the shared rewrite phase immediately.
 48. Bot prep rewrite now falls back to locking in the existing profile if rewrite generation fails or returns empty.
 49. Local bot typing state now stays visible until the bot actually locks in.
 50. Exploration presence updates now merge authoritative server state back into the local exploration state.

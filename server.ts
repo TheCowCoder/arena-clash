@@ -804,6 +804,7 @@ async function startServer() {
     room.phase = 'tweak';
     for (const playerId of Object.keys(room.players)) {
       room.players[playerId].lockedIn = !!room.players[playerId]?.character?.isNpcAlly;
+      room.players[playerId].prepSkippedPreview = true;
     }
     emitRoomPlayersUpdated(roomId);
     maybeAdvanceArenaPreparation(roomId);
@@ -820,6 +821,7 @@ async function startServer() {
       room.players[playerId].lockedIn = false;
       room.players[playerId].action = "";
       room.players[playerId].autoLockedThisTurn = false;
+      room.players[playerId].prepSkippedPreview = false;
     }
     emitTypingStatus(`room:${roomId}`);
     io.to(roomId).emit('matchFound', {
@@ -842,6 +844,7 @@ async function startServer() {
       room.players[playerId].lockedIn = false;
       room.players[playerId].action = "";
       room.players[playerId].autoLockedThisTurn = false;
+      room.players[playerId].prepSkippedPreview = false;
     }
     arenaPreparationTimers[roomId] = {
       interval: null as any,
@@ -1602,7 +1605,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       const roomId = players[socket.id]?.room;
       if (roomId && rooms[roomId]?.players?.[socket.id] && rooms[roomId].phase !== 'battle') {
         rooms[roomId].players[socket.id].character = normalizedState;
-        if (rooms[roomId].phase === 'tweak') {
+        if (rooms[roomId].phase === 'tweak' || rooms[roomId].players[socket.id].prepSkippedPreview) {
           clearTypingForSocket(socket.id);
           lockArenaPreparationPlayer(roomId, socket.id);
         } else {
@@ -2167,7 +2170,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       if (!roomId) return;
 
       const room = rooms[roomId];
-      if (!room || room.phase !== 'tweak' || !room.players[socket.id]) return;
+      if (!room || !room.players[socket.id] || (room.phase !== 'tweak' && !room.players[socket.id].prepSkippedPreview)) return;
 
       clearTypingForSocket(socket.id);
       lockArenaPreparationPlayer(roomId, socket.id);
@@ -2187,6 +2190,9 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       if (!timer.skipVotes.includes(socket.id)) {
         timer.skipVotes.push(socket.id);
       }
+
+      room.players[socket.id].prepSkippedPreview = true;
+      emitRoomPlayersUpdated(roomId);
 
       const allReadyToSkip = participantIds.length > 0 && participantIds.every(playerId => timer.skipVotes.includes(playerId));
       if (allReadyToSkip) {
