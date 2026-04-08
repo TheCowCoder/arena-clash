@@ -142,6 +142,88 @@ interface WorldNpc {
   followTargetId?: string | null;
 }
 
+interface MapMarkerLayoutInput {
+  id: string;
+  anchorX: number;
+  anchorY: number;
+  width: number;
+  height: number;
+}
+
+interface MapMarkerLayoutPosition {
+  x: number;
+  y: number;
+}
+
+const clampMapValue = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+const estimateMarkerLabelWidth = (label: string, minWidth: number, maxWidth: number, charWidth: number) => (
+  clampMapValue(label.length * charWidth, minWidth, maxWidth)
+);
+
+const getLocationMarkerGlyph = (type: string) => {
+  if (type === 'village') return '🏘️';
+  if (type === 'ruins') return '🏚️';
+  if (type === 'cave') return '🕳️';
+  return '·';
+};
+
+const layoutRepelledMarkers = (
+  markers: MapMarkerLayoutInput[],
+  bounds: { width: number; height: number },
+): Record<string, MapMarkerLayoutPosition> => {
+  if (markers.length === 0) return {};
+
+  const padding = 8;
+  const positions = markers.map(marker => ({
+    ...marker,
+    x: marker.anchorX,
+    y: marker.anchorY,
+  }));
+
+  for (let iteration = 0; iteration < 36; iteration++) {
+    const forces = positions.map(() => ({ x: 0, y: 0 }));
+
+    for (let i = 0; i < positions.length; i++) {
+      for (let j = i + 1; j < positions.length; j++) {
+        const left = positions[i];
+        const right = positions[j];
+        const dx = right.x - left.x;
+        const dy = right.y - left.y;
+        const overlapX = (left.width + right.width) / 2 + padding - Math.abs(dx);
+        const overlapY = (left.height + right.height) / 2 + padding - Math.abs(dy);
+
+        if (overlapX <= 0 || overlapY <= 0) continue;
+
+        const safeDx = Math.abs(dx) < 0.01 ? (j - i || 1) * 0.01 : dx;
+        const safeDy = Math.abs(dy) < 0.01 ? ((i + j) % 2 === 0 ? 0.01 : -0.01) : dy;
+        const length = Math.hypot(safeDx, safeDy) || 1;
+        const pushStrength = Math.max(overlapX, overlapY) * 0.22;
+        const pushX = (safeDx / length) * pushStrength;
+        const pushY = (safeDy / length) * pushStrength;
+
+        forces[i].x -= pushX;
+        forces[i].y -= pushY;
+        forces[j].x += pushX;
+        forces[j].y += pushY;
+      }
+    }
+
+    positions.forEach((marker, index) => {
+      forces[index].x += (marker.anchorX - marker.x) * 0.12;
+      forces[index].y += (marker.anchorY - marker.y) * 0.12;
+
+      marker.x = clampMapValue(marker.x + forces[index].x, marker.width / 2 + 4, bounds.width - marker.width / 2 - 4);
+      marker.y = clampMapValue(marker.y + forces[index].y, marker.height / 2 + 4, bounds.height - marker.height / 2 - 4);
+    });
+  }
+
+  return Object.fromEntries(positions.map(marker => [
+    marker.id,
+    { x: marker.x, y: marker.y },
+  ]));
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('home');
   const [gameState, setGameState] = useState<GameState>('menu');
@@ -172,7 +254,8 @@ export default function App() {
       charModel: 'gemini-2.5-flash',
       explorationModel: 'gemini-3-flash-preview',
       battleModel: 'gemini-2.5-pro',
-      botModel: 'gemini-2.5-flash'
+      botModel: 'gemini-2.5-flash',
+      unlimitedTurnTime: false,
     };
     const saved = localStorage.getItem('duo_settings');
     if (saved) {
@@ -194,6 +277,7 @@ export default function App() {
     return defaultSettings;
   });
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsPage, setSettingsPage] = useState<'general' | 'debug'>('general');
   const settingsRef = useRef(settings);
 
   useEffect(() => {
@@ -1192,7 +1276,8 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
               difficulty: 'Medium',
               botProfile: fullProfile,
               botName: enemyName,
-              npcAllies
+              npcAllies,
+              unlimitedTurnTime: settingsRef.current.unlimitedTurnTime,
             });
             toolBadges.push(`⚔️ **Combat Initiated** — engaging ${enemyName}!`);
           } else if (tc.name === 'move_to_location') {
@@ -1858,7 +1943,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       }
       return;
     }
-    socket.emit('enterArena');
+    socket.emit('enterArena', { unlimitedTurnTime: settingsRef.current.unlimitedTurnTime });
   };
 
   const handleNewCharacter = () => {
@@ -2277,7 +2362,8 @@ Be creative and concise.`;
                   socket.emit('startBotMatch', {
                     difficulty: difficultyLabels[botDifficulty],
                     botProfile: selectedChar?.content,
-                    botName: selectedChar?.name
+                    botName: selectedChar?.name,
+                    unlimitedTurnTime: settingsRef.current.unlimitedTurnTime,
                   });
                 }}
                 disabled={!selectedBotCharacter}
@@ -2675,13 +2761,92 @@ Be creative and concise.`;
     const gridSize = worldData.meta.gridSize;
     const mapW = 140;
     const mapH = 140;
+    const fullMapW = window.innerWidth - 32;
+    const fullMapH = window.innerHeight - 32;
 
-    const playerScaleX = mapW / gridSize.width;
-    const playerScaleY = mapH / gridSize.height;
-    const playerPixelX = currentLoc ? currentLoc.x * playerScaleX : mapW / 2;
-    const playerPixelY = currentLoc ? currentLoc.y * playerScaleY : mapH / 2;
+    const miniScaleX = mapW / gridSize.width;
+    const miniScaleY = mapH / gridSize.height;
+    const fullScaleX = fullMapW / gridSize.width;
+    const fullScaleY = fullMapH / gridSize.height;
+    const playerPixelX = currentLoc ? currentLoc.x * miniScaleX : mapW / 2;
+    const playerPixelY = currentLoc ? currentLoc.y * miniScaleY : mapH / 2;
     const miniOffsetX = mapW / 2 - playerPixelX;
     const miniOffsetY = mapH / 2 - playerPixelY;
+
+    const discoveredLocations = worldData.locations.filter((loc: WorldLocation) => explorationState.discoveredLocations.includes(loc.id));
+    const visibleNpcs = worldNpcs.filter(npc => explorationState.discoveredLocations.includes(npc.locationId) || npc.followTargetId === socket.id);
+    const visiblePlayers = worldPlayers.filter(p => p.id !== socket.id);
+
+    const miniMarkerLayouts = layoutRepelledMarkers([
+      ...discoveredLocations.map((loc: WorldLocation) => ({
+        id: `mini-loc-${loc.id}`,
+        anchorX: loc.x * miniScaleX,
+        anchorY: loc.y * miniScaleY,
+        width: estimateMarkerLabelWidth(loc.name, 16, 44, 3.1),
+        height: 14,
+      })),
+      ...visibleNpcs.map(npc => ({
+        id: `mini-npc-${npc.id}`,
+        anchorX: npc.x * miniScaleX,
+        anchorY: npc.y * miniScaleY,
+        width: estimateMarkerLabelWidth(npc.name, 18, 54, 3.6),
+        height: 14,
+      })),
+      ...visiblePlayers.map(player => ({
+        id: `mini-player-${player.id}`,
+        anchorX: player.x * miniScaleX,
+        anchorY: player.y * miniScaleY,
+        width: estimateMarkerLabelWidth(player.name, 20, 58, 3.8),
+        height: 14,
+      })),
+    ], { width: mapW, height: mapH });
+
+    const fullMarkerLayouts = layoutRepelledMarkers([
+      ...discoveredLocations.map((loc: WorldLocation) => ({
+        id: `full-loc-${loc.id}`,
+        anchorX: loc.x * fullScaleX,
+        anchorY: loc.y * fullScaleY,
+        width: estimateMarkerLabelWidth(loc.name, 44, 150, 6.8),
+        height: 26,
+      })),
+      ...visibleNpcs.map(npc => ({
+        id: `full-npc-${npc.id}`,
+        anchorX: npc.x * fullScaleX,
+        anchorY: npc.y * fullScaleY,
+        width: estimateMarkerLabelWidth(npc.name, 40, 130, 6.3),
+        height: 22,
+      })),
+      ...visiblePlayers.map(player => ({
+        id: `full-player-${player.id}`,
+        anchorX: player.x * fullScaleX,
+        anchorY: player.y * fullScaleY,
+        width: estimateMarkerLabelWidth(player.name, 36, 120, 6.1),
+        height: 20,
+      })),
+    ], { width: fullMapW, height: fullMapH });
+
+    const renderMarkerConnector = (anchorX: number, anchorY: number, x: number, y: number, color: string, thickness = 1) => {
+      const dx = x - anchorX;
+      const dy = y - anchorY;
+      const distance = Math.hypot(dx, dy);
+      if (distance < 6) return null;
+
+      return (
+        <div
+          className="absolute pointer-events-none"
+          style={{
+            left: anchorX,
+            top: anchorY,
+            width: distance,
+            height: thickness,
+            backgroundColor: color,
+            opacity: 0.55,
+            transformOrigin: '0 50%',
+            transform: `translateY(-50%) rotate(${Math.atan2(dy, dx)}rad)`,
+          }}
+        />
+      );
+    };
 
     return (
       <div className="relative" style={{ width: mapW, height: mapH }}>
@@ -2704,51 +2869,82 @@ Be creative and concise.`;
           >
             <div style={{ transform: `translate(${miniOffsetX}px, ${miniOffsetY}px)`, position: 'absolute', inset: 0 }}>
             {worldData.islands.map((island: any) => {
-              const fScaleX = mapW / gridSize.width;
-              const fScaleY = mapH / gridSize.height;
               return (
                 <div key={island.id} className="absolute rounded opacity-40" style={{
-                  left: island.bounds.x * fScaleX, top: island.bounds.y * fScaleY,
-                  width: island.bounds.width * fScaleX, height: island.bounds.height * fScaleY,
+                  left: island.bounds.x * miniScaleX, top: island.bounds.y * miniScaleY,
+                  width: island.bounds.width * miniScaleX, height: island.bounds.height * miniScaleY,
                   backgroundColor: island.biome === 'volcanic' ? '#8B4513' : island.biome === 'enchanted_forest' ? '#2d5a27' : island.biome === 'coral_reef' ? '#00CED1' : '#228B22',
                 }}>
                   <span className="absolute inset-0 flex items-center justify-center text-[4px] font-black text-white/60 pointer-events-none whitespace-nowrap overflow-hidden">{island.name}</span>
                 </div>
               );
             })}
-            {worldData.locations
-              .filter((l: WorldLocation) => explorationState.discoveredLocations.includes(l.id))
-              .map((loc: WorldLocation) => {
-                const fScaleX = mapW / gridSize.width;
-                const fScaleY = mapH / gridSize.height;
-                const isCurrent = loc.id === explorationState.locationId;
-                return (
-                  <div key={loc.id} className="absolute flex flex-col items-center pointer-events-none"
-                    style={{ left: loc.x * fScaleX, top: loc.y * fScaleY, transform: 'translate(-50%, -50%)' }}
+            {discoveredLocations.map((loc: WorldLocation) => {
+              const anchorX = loc.x * miniScaleX;
+              const anchorY = loc.y * miniScaleY;
+              const layout = miniMarkerLayouts[`mini-loc-${loc.id}`] || { x: anchorX, y: anchorY };
+              const isCurrent = loc.id === explorationState.locationId;
+              return (
+                <React.Fragment key={loc.id}>
+                  {renderMarkerConnector(anchorX, anchorY, layout.x, layout.y, isCurrent ? 'rgba(34, 197, 94, 0.75)' : 'rgba(255, 255, 255, 0.45)')}
+                  <div
+                    className={`absolute rounded-full pointer-events-none ${isCurrent ? 'bg-duo-green animate-pulse' : 'bg-white/70'}`}
+                    style={{ left: anchorX, top: anchorY, width: isCurrent ? 4 : 3, height: isCurrent ? 4 : 3, transform: 'translate(-50%, -50%)' }}
+                  />
+                  <div
+                    className="absolute flex flex-col items-center pointer-events-none transition-all duration-300 ease-out"
+                    style={{ left: layout.x, top: layout.y, transform: 'translate(-50%, -50%)' }}
                     title={loc.name}
                   >
-                    <span className="text-[5px] leading-none">{loc.type === 'village' ? '🏘️' : loc.type === 'ruins' ? '🏚️' : loc.type === 'cave' ? '🕳️' : '·'}</span>
-                    <div className={`rounded-full ${isCurrent ? 'bg-duo-green animate-pulse' : 'bg-white/60'}`}
-                      style={{ width: isCurrent ? 4 : 3, height: isCurrent ? 4 : 3 }}
-                    />
+                    <span className="text-[5px] leading-none">{getLocationMarkerGlyph(loc.type)}</span>
+                    <span className={`text-[4px] font-black whitespace-nowrap ${isCurrent ? 'text-duo-green' : 'text-white/80'}`}>{loc.name}</span>
                   </div>
-                );
-              })}
-            {worldNpcs
-              .filter(npc => explorationState.discoveredLocations.includes(npc.locationId) || npc.followTargetId === socket.id)
-              .map(npc => {
-                const fScaleX = mapW / gridSize.width;
-                const fScaleY = mapH / gridSize.height;
-                return (
-                  <div key={npc.id} className="absolute flex flex-col items-center pointer-events-none"
-                    style={{ left: npc.x * fScaleX, top: npc.y * fScaleY, transform: 'translate(-50%, -50%)' }}
+                </React.Fragment>
+              );
+            })}
+            {visibleNpcs.map(npc => {
+              const anchorX = npc.x * miniScaleX;
+              const anchorY = npc.y * miniScaleY;
+              const layout = miniMarkerLayouts[`mini-npc-${npc.id}`] || { x: anchorX, y: anchorY };
+              return (
+                <React.Fragment key={npc.id}>
+                  {renderMarkerConnector(anchorX, anchorY, layout.x, layout.y, 'rgba(250, 204, 21, 0.65)')}
+                  <div
+                    className="absolute rounded-full bg-yellow-200/80 pointer-events-none"
+                    style={{ left: anchorX, top: anchorY, width: 3, height: 3, transform: 'translate(-50%, -50%)' }}
+                  />
+                  <div
+                    className="absolute flex flex-col items-center pointer-events-none transition-all duration-300 ease-out"
+                    style={{ left: layout.x, top: layout.y, transform: 'translate(-50%, -50%)' }}
                     title={npc.name}
                   >
                     <span className="text-[6px] leading-none">{getNpcRoleEmoji(npc.role)}</span>
                     <span className="text-[5px] font-bold text-yellow-200 whitespace-nowrap">{npc.name}</span>
                   </div>
-                );
-              })}
+                </React.Fragment>
+              );
+            })}
+            {visiblePlayers.map(player => {
+              const anchorX = player.x * miniScaleX;
+              const anchorY = player.y * miniScaleY;
+              const layout = miniMarkerLayouts[`mini-player-${player.id}`] || { x: anchorX, y: anchorY };
+              return (
+                <React.Fragment key={player.id}>
+                  {renderMarkerConnector(anchorX, anchorY, layout.x, layout.y, 'rgba(59, 130, 246, 0.65)')}
+                  <div
+                    className="absolute rounded-full bg-duo-blue pointer-events-none"
+                    style={{ left: anchorX, top: anchorY, width: 3, height: 3, transform: 'translate(-50%, -50%)' }}
+                  />
+                  <div
+                    className="absolute flex flex-col items-center pointer-events-none transition-all duration-300 ease-out"
+                    style={{ left: layout.x, top: layout.y, transform: 'translate(-50%, -50%)' }}
+                  >
+                    <div className="rounded-full bg-duo-blue" style={{ width: 4, height: 4 }} />
+                    <span className="text-[5px] font-bold text-duo-blue whitespace-nowrap">{player.name}</span>
+                  </div>
+                </React.Fragment>
+              );
+            })}
             </div>
             {/* Center crosshair */}
             <div className="absolute rounded-full border-2 border-duo-green/70" style={{ left: mapW/2 - 4, top: mapH/2 - 4, width: 8, height: 8, pointerEvents: 'none' }} />
@@ -2818,34 +3014,28 @@ Be creative and concise.`;
               <div style={{ transform: `translate(${mapPan.x}px, ${mapPan.y}px) scale(${mapZoom})`, transformOrigin: '0 0', position: 'absolute', inset: 0 }}>
                 {/* Islands */}
                 {worldData.islands.map((island: any) => {
-                  const fMapW = window.innerWidth - 32;
-                  const fMapH = window.innerHeight - 32;
-                  const fScaleX = fMapW / gridSize.width;
-                  const fScaleY = fMapH / gridSize.height;
                   return (
                     <div key={island.id} className="absolute rounded opacity-30" style={{
-                      left: island.bounds.x * fScaleX, top: island.bounds.y * fScaleY,
-                      width: island.bounds.width * fScaleX, height: island.bounds.height * fScaleY,
+                      left: island.bounds.x * fullScaleX, top: island.bounds.y * fullScaleY,
+                      width: island.bounds.width * fullScaleX, height: island.bounds.height * fullScaleY,
                       backgroundColor: island.biome === 'volcanic' ? '#8B4513' : island.biome === 'enchanted_forest' ? '#2d5a27' : island.biome === 'coral_reef' ? '#00CED1' : '#228B22',
                     }}>
                       <span className="absolute inset-0 flex items-center justify-center text-[20px] font-black text-white/40 pointer-events-none whitespace-nowrap">{island.name}</span>
                     </div>
                   );
                 })}
-                {/* Discovered locations with labels */}
-                {worldData.locations
-                  .filter((l: WorldLocation) => explorationState.discoveredLocations.includes(l.id))
-                  .map((loc: WorldLocation) => {
-                    const fMapW = window.innerWidth - 32;
-                    const fMapH = window.innerHeight - 32;
-                    const fScaleX = fMapW / gridSize.width;
-                    const fScaleY = fMapH / gridSize.height;
-                    const isCurrent = loc.id === explorationState.locationId;
-                    const isConnected = getConnectedLocations().find(c => c.id === loc.id);
-                    return (
-                      <div key={loc.id} className="absolute flex flex-col items-center" style={{ left: loc.x * fScaleX, top: loc.y * fScaleY, transform: 'translate(-50%, -50%)' }}>
+                {discoveredLocations.map((loc: WorldLocation) => {
+                  const anchorX = loc.x * fullScaleX;
+                  const anchorY = loc.y * fullScaleY;
+                  const layout = fullMarkerLayouts[`full-loc-${loc.id}`] || { x: anchorX, y: anchorY };
+                  const isCurrent = loc.id === explorationState.locationId;
+                  const isConnected = getConnectedLocations().find(c => c.id === loc.id);
+                  return (
+                    <React.Fragment key={loc.id}>
+                      {renderMarkerConnector(anchorX, anchorY, layout.x, layout.y, isCurrent ? 'rgba(34, 197, 94, 0.8)' : 'rgba(255, 255, 255, 0.4)', 1.5)}
+                      <div className="absolute" style={{ left: anchorX, top: anchorY, transform: 'translate(-50%, -50%)' }}>
                         {isCurrent && (
-                          <Target className="w-5 h-5 text-duo-green animate-pulse mb-0.5" />
+                          <Target className="w-5 h-5 text-duo-green animate-pulse mb-0.5 -translate-x-1/2 -translate-y-full absolute left-1/2 top-0" />
                         )}
                         <div
                           className={`rounded-full cursor-pointer transition-all ${isCurrent ? 'bg-duo-green ring-2 ring-duo-green/50' : isConnected ? 'bg-yellow-400 hover:bg-yellow-300' : 'bg-white/60'}`}
@@ -2857,8 +3047,10 @@ Be creative and concise.`;
                             }
                           }}
                         />
-                        <span className={`text-[8px] font-bold mt-0.5 whitespace-nowrap ${isCurrent ? 'text-duo-green' : 'text-white/80'}`}>
-                          {loc.type === 'village' ? '🏘️' : loc.type === 'ruins' ? '🏚️' : loc.type === 'cave' ? '🕳️' : ''} {loc.name}
+                      </div>
+                      <div className="absolute flex flex-col items-center pointer-events-none transition-all duration-300 ease-out" style={{ left: layout.x, top: layout.y, transform: 'translate(-50%, -50%)' }}>
+                        <span className={`text-[8px] font-bold whitespace-nowrap ${isCurrent ? 'text-duo-green' : 'text-white/80'}`}>
+                          {getLocationMarkerGlyph(loc.type)} {loc.name}
                         </span>
                         {(loc.npcs?.length > 0 || loc.enemies?.length > 0) && (
                           <span className="text-[8px] font-bold whitespace-nowrap">
@@ -2867,37 +3059,39 @@ Be creative and concise.`;
                           </span>
                         )}
                       </div>
-                    );
-                  })}
-                {worldNpcs
-                  .filter(npc => explorationState.discoveredLocations.includes(npc.locationId) || npc.followTargetId === socket.id)
-                  .map(npc => {
-                    const fMapW = window.innerWidth - 32;
-                    const fMapH = window.innerHeight - 32;
-                    const fScaleX = fMapW / gridSize.width;
-                    const fScaleY = fMapH / gridSize.height;
-                    return (
-                      <div key={npc.id} className="absolute flex flex-col items-center" style={{ left: npc.x * fScaleX, top: npc.y * fScaleY, transform: 'translate(-50%, -50%)' }}>
+                    </React.Fragment>
+                  );
+                })}
+                {visibleNpcs.map(npc => {
+                  const anchorX = npc.x * fullScaleX;
+                  const anchorY = npc.y * fullScaleY;
+                  const layout = fullMarkerLayouts[`full-npc-${npc.id}`] || { x: anchorX, y: anchorY };
+                  return (
+                    <React.Fragment key={npc.id}>
+                      {renderMarkerConnector(anchorX, anchorY, layout.x, layout.y, 'rgba(250, 204, 21, 0.7)', 1.5)}
+                      <div className="absolute rounded-full bg-yellow-200/80" style={{ left: anchorX, top: anchorY, width: 5, height: 5, transform: 'translate(-50%, -50%)' }} />
+                      <div className="absolute flex flex-col items-center pointer-events-none transition-all duration-300 ease-out" style={{ left: layout.x, top: layout.y, transform: 'translate(-50%, -50%)' }}>
                         <div className="text-sm">{getNpcRoleEmoji(npc.role)}</div>
                         <span className="text-[8px] font-bold mt-0.5 whitespace-nowrap text-yellow-200">{npc.name}</span>
                       </div>
-                    );
-                  })}
-                {/* Other players */}
-                {worldPlayers
-                  .filter(p => p.id !== socket.id)
-                  .map(p => {
-                    const fMapW = window.innerWidth - 32;
-                    const fMapH = window.innerHeight - 32;
-                    const fScaleX = fMapW / gridSize.width;
-                    const fScaleY = fMapH / gridSize.height;
-                    return (
-                      <div key={p.id} className="absolute flex flex-col items-center" style={{ left: p.x * fScaleX, top: p.y * fScaleY, transform: 'translate(-50%, -50%)' }}>
+                    </React.Fragment>
+                  );
+                })}
+                {visiblePlayers.map(player => {
+                  const anchorX = player.x * fullScaleX;
+                  const anchorY = player.y * fullScaleY;
+                  const layout = fullMarkerLayouts[`full-player-${player.id}`] || { x: anchorX, y: anchorY };
+                  return (
+                    <React.Fragment key={player.id}>
+                      {renderMarkerConnector(anchorX, anchorY, layout.x, layout.y, 'rgba(59, 130, 246, 0.7)', 1.5)}
+                      <div className="absolute rounded-full bg-duo-blue" style={{ left: anchorX, top: anchorY, width: 6, height: 6, transform: 'translate(-50%, -50%)' }} />
+                      <div className="absolute flex flex-col items-center pointer-events-none transition-all duration-300 ease-out" style={{ left: layout.x, top: layout.y, transform: 'translate(-50%, -50%)' }}>
                         <div className="rounded-full bg-duo-blue" style={{ width: 6, height: 6 }} />
-                        <span className="text-[7px] font-bold text-duo-blue mt-0.5 whitespace-nowrap">{p.name}</span>
+                        <span className="text-[7px] font-bold text-duo-blue mt-0.5 whitespace-nowrap">{player.name}</span>
                       </div>
-                    );
-                  })}
+                    </React.Fragment>
+                  );
+                })}
               </div>
               <div className="absolute bottom-2 left-2 text-[10px] font-bold text-white/50">Scroll to zoom · Drag to pan</div>
               {/* Compass rose */}
@@ -3290,7 +3484,8 @@ Be creative and concise.`;
                   socket.emit('startBotMatch', {
                     difficulty: bot.difficulty,
                     botProfile,
-                    botName: bot.name
+                    botName: bot.name,
+                    unlimitedTurnTime: settingsRef.current.unlimitedTurnTime,
                   });
                 }}
                 disabled={!character}
@@ -3384,112 +3579,155 @@ Be creative and concise.`;
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-xl border-b-4 border-gray-200">
               <h3 className="text-2xl font-black text-duo-text mb-6 text-center">Settings</h3>
+              <div className="flex gap-2 mb-6">
+                <button
+                  onClick={() => setSettingsPage('general')}
+                  className={`flex-1 rounded-xl px-3 py-2 text-sm font-black transition-colors ${settingsPage === 'general' ? 'bg-duo-blue text-white' : 'bg-duo-gray text-duo-gray-dark'}`}
+                >
+                  General
+                </button>
+                <button
+                  onClick={() => setSettingsPage('debug')}
+                  className={`flex-1 rounded-xl px-3 py-2 text-sm font-black transition-colors ${settingsPage === 'debug' ? 'bg-duo-blue text-white' : 'bg-duo-gray text-duo-gray-dark'}`}
+                >
+                  Debug
+                </button>
+              </div>
               
-              <div className="space-y-4 mb-8">
-                <div>
-                  <label className="block text-sm font-bold text-duo-gray-dark mb-1">
-                    API Key (Optional)
-                    {settings.apiKey?.trim() && <span className="ml-2 text-duo-green text-xs">✓ Custom Key Active</span>}
-                  </label>
-                  <input 
-                    type="password" 
-                    value={settings.apiKey}
-                    onChange={e => setSettings({...settings, apiKey: e.target.value})}
-                    className="w-full bg-duo-gray rounded-xl px-4 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue mb-2"
-                    placeholder="Leave blank to use default"
-                  />
-                  <button
-                    onClick={async () => {
-                      if (window.aistudio && window.aistudio.openSelectKey) {
-                        await window.aistudio.openSelectKey();
-                      } else {
-                        alert("Platform API key selection is not available in this environment.");
-                      }
-                    }}
-                    className="w-full bg-duo-blue hover:bg-duo-blue-light text-white font-bold py-2 px-4 rounded-xl transition-colors"
-                  >
-                    Select AI Studio Platform Key
-                  </button>
-                  <p className="text-xs text-duo-gray-light mt-2">
-                    If you are hitting rate limits, click the button above to link your paid Google Cloud project.
-                  </p>
-                </div>
-                <div>
-                  <label className="block text-sm font-bold text-duo-gray-dark mb-1">Char Creator Model</label>
-                  <select 
-                    value={settings.charModel}
-                    onChange={e => setSettings({...settings, charModel: e.target.value})}
-                    className="w-full bg-duo-gray rounded-xl px-4 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
-                  >
-                    <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
-                    <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
-                    <option value="gemini-2.5-pro">gemini-2.5-pro</option>
-                    <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-bold text-duo-gray-dark mb-1">Exploration Model</label>
-                  <select 
-                    value={settings.explorationModel}
-                    onChange={e => setSettings({...settings, explorationModel: e.target.value})}
-                    className="w-full bg-duo-gray rounded-xl px-4 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
-                  >
-                    <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
-                    <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
-                    <option value="gemini-2.5-pro">gemini-2.5-pro</option>
-                    <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-bold text-duo-gray-dark mb-1">Battle Model</label>
-                  <select 
-                    value={settings.battleModel}
-                    onChange={e => setSettings({...settings, battleModel: e.target.value})}
-                    className="w-full bg-duo-gray rounded-xl px-4 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
-                  >
-                    <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
-                    <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
-                    <option value="gemini-2.5-pro">gemini-2.5-pro</option>
-                    <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-bold text-duo-gray-dark mb-1">Bot Model</label>
-                  <select 
-                    value={settings.botModel}
-                    onChange={e => setSettings({...settings, botModel: e.target.value})}
-                    className="w-full bg-duo-gray rounded-xl px-4 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
-                  >
-                    <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
-                    <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
-                    <option value="gemini-2.5-pro">gemini-2.5-pro</option>
-                    <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Account Section */}
-              <div className="border-t-2 border-duo-gray pt-4 mt-4">
-                <label className="block text-sm font-bold text-duo-gray-dark mb-2">Cloud Account</label>
-                {authUser ? (
-                  <div className="flex items-center justify-between bg-duo-green/10 border border-duo-green/30 rounded-xl p-3">
+              {settingsPage === 'general' ? (
+                <>
+                  <div className="space-y-4 mb-8">
                     <div>
-                      <div className="font-bold text-sm text-duo-text">Logged in as {authUser}</div>
-                      <div className="text-[10px] text-duo-green-dark font-bold">Characters synced to cloud ☁️</div>
+                      <label className="block text-sm font-bold text-duo-gray-dark mb-1">
+                        API Key (Optional)
+                        {settings.apiKey?.trim() && <span className="ml-2 text-duo-green text-xs">✓ Custom Key Active</span>}
+                      </label>
+                      <input 
+                        type="password" 
+                        value={settings.apiKey}
+                        onChange={e => setSettings({...settings, apiKey: e.target.value})}
+                        className="w-full bg-duo-gray rounded-xl px-4 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue mb-2"
+                        placeholder="Leave blank to use default"
+                      />
+                      <button
+                        onClick={async () => {
+                          if (window.aistudio && window.aistudio.openSelectKey) {
+                            await window.aistudio.openSelectKey();
+                          } else {
+                            alert("Platform API key selection is not available in this environment.");
+                          }
+                        }}
+                        className="w-full bg-duo-blue hover:bg-duo-blue-light text-white font-bold py-2 px-4 rounded-xl transition-colors"
+                      >
+                        Select AI Studio Platform Key
+                      </button>
+                      <p className="text-xs text-duo-gray-light mt-2">
+                        If you are hitting rate limits, click the button above to link your paid Google Cloud project.
+                      </p>
                     </div>
-                    <button onClick={handleLogout} className="text-xs font-bold text-red-500 hover:underline">Logout</button>
+                    <div>
+                      <label className="block text-sm font-bold text-duo-gray-dark mb-1">Char Creator Model</label>
+                      <select 
+                        value={settings.charModel}
+                        onChange={e => setSettings({...settings, charModel: e.target.value})}
+                        className="w-full bg-duo-gray rounded-xl px-4 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
+                      >
+                        <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
+                        <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
+                        <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+                        <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-bold text-duo-gray-dark mb-1">Exploration Model</label>
+                      <select 
+                        value={settings.explorationModel}
+                        onChange={e => setSettings({...settings, explorationModel: e.target.value})}
+                        className="w-full bg-duo-gray rounded-xl px-4 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
+                      >
+                        <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
+                        <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
+                        <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+                        <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-bold text-duo-gray-dark mb-1">Battle Model</label>
+                      <select 
+                        value={settings.battleModel}
+                        onChange={e => setSettings({...settings, battleModel: e.target.value})}
+                        className="w-full bg-duo-gray rounded-xl px-4 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
+                      >
+                        <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
+                        <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
+                        <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+                        <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-bold text-duo-gray-dark mb-1">Bot Model</label>
+                      <select 
+                        value={settings.botModel}
+                        onChange={e => setSettings({...settings, botModel: e.target.value})}
+                        className="w-full bg-duo-gray rounded-xl px-4 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
+                      >
+                        <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
+                        <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
+                        <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+                        <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                      </select>
+                    </div>
                   </div>
-                ) : dbAvailable ? (
-                  <button
-                    onClick={() => { setShowAuthModal(true); setShowSettings(false); }}
-                    className="duo-btn duo-btn-blue w-full py-2 text-sm"
-                  >
-                    Sign In / Register
-                  </button>
-                ) : (
-                  <p className="text-xs text-duo-gray-dark">Database not connected. Characters saved locally.</p>
-                )}
-              </div>
+
+                  {/* Account Section */}
+                  <div className="border-t-2 border-duo-gray pt-4 mt-4">
+                    <label className="block text-sm font-bold text-duo-gray-dark mb-2">Cloud Account</label>
+                    {authUser ? (
+                      <div className="flex items-center justify-between bg-duo-green/10 border border-duo-green/30 rounded-xl p-3">
+                        <div>
+                          <div className="font-bold text-sm text-duo-text">Logged in as {authUser}</div>
+                          <div className="text-[10px] text-duo-green-dark font-bold">Characters synced to cloud ☁️</div>
+                        </div>
+                        <button onClick={handleLogout} className="text-xs font-bold text-red-500 hover:underline">Logout</button>
+                      </div>
+                    ) : dbAvailable ? (
+                      <button
+                        onClick={() => { setShowAuthModal(true); setShowSettings(false); }}
+                        className="duo-btn duo-btn-blue w-full py-2 text-sm"
+                      >
+                        Sign In / Register
+                      </button>
+                    ) : (
+                      <p className="text-xs text-duo-gray-dark">Database not connected. Characters saved locally.</p>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-4 mb-8">
+                  <div className="rounded-2xl border border-duo-gray bg-duo-gray/30 p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <h4 className="text-sm font-black text-duo-text">Unlimited Turn Times</h4>
+                        <p className="text-xs text-duo-gray-dark mt-1">
+                          Disable arena turn countdowns for queue PvP and bot fights while debugging shared combat systems.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setSettings({ ...settings, unlimitedTurnTime: !settings.unlimitedTurnTime })}
+                        className={`relative h-7 w-14 rounded-full transition-colors ${settings.unlimitedTurnTime ? 'bg-duo-green' : 'bg-duo-gray-dark/30'}`}
+                        aria-pressed={settings.unlimitedTurnTime}
+                      >
+                        <span
+                          className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-transform ${settings.unlimitedTurnTime ? 'translate-x-8' : 'translate-x-1'}`}
+                        />
+                      </button>
+                    </div>
+                    <div className="mt-3 text-[11px] font-bold text-duo-gray-dark">
+                      Current state: {settings.unlimitedTurnTime ? 'Timers disabled for new arena rooms' : 'Standard timed turns'}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <button 
                 onClick={() => setShowSettings(false)}

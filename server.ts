@@ -204,6 +204,7 @@ async function startServer() {
     id: string;
     character: any;
     isReady: boolean;
+    unlimitedTurnTime?: boolean;
   }
   let matchmakingQueue: Record<string, QueuePlayer> = {};
   const rooms: Record<string, any> = {};
@@ -214,6 +215,11 @@ async function startServer() {
     clearRoomTimer(roomId);
     const room = rooms[roomId];
     if (!room) return;
+
+    if (room.unlimitedTurnTime) {
+      io.to(roomId).emit("turnTimerTick", { remaining: null });
+      return;
+    }
 
     roomTimers[roomId] = { interval: null as any, remaining: TURN_TIMER_SECONDS };
 
@@ -1560,6 +1566,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         id: roomId,
         host: socket.id,
         isBotMatch: true,
+        unlimitedTurnTime: !!data.unlimitedTurnTime,
         botDifficulty: difficulty,
         npcAllyIds: npcAllies.map((n: any) => `npc_ally_${n.id}`),
         players: roomPlayers,
@@ -1577,13 +1584,18 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       startRoomTimer(roomId);
     });
 
-    socket.on("enterArena", () => {
+    socket.on("enterArena", (data?: { unlimitedTurnTime?: boolean }) => {
       if (!players[socket.id]?.character) {
         socket.emit("error", "Create a character first.");
         return;
       }
 
-      matchmakingQueue[socket.id] = { id: socket.id, character: players[socket.id].character, isReady: false };
+      matchmakingQueue[socket.id] = {
+        id: socket.id,
+        character: players[socket.id].character,
+        isReady: false,
+        unlimitedTurnTime: !!data?.unlimitedTurnTime,
+      };
       socket.join("matchmaking_lobby");
       io.to("matchmaking_lobby").emit("queueUpdated", Object.values(matchmakingQueue));
       socket.emit("waitingForOpponent");
@@ -1615,6 +1627,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
             id: roomId,
             host: queueList[0].id,
             players: roomPlayers,
+            unlimitedTurnTime: queueList.some(p => p.unlimitedTurnTime),
             isBotMatch: false,
             history: []
           };
