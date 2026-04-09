@@ -563,7 +563,9 @@ export default function App() {
 
   useEffect(() => {
     settingsRef.current = settings;
-    localStorage.setItem('duo_settings', JSON.stringify(settings));
+    // Only persist non-model settings to localStorage — models always use current defaults
+    const { charModel, explorationModel, battleModel, botModel, ...persistedSettings } = settings;
+    localStorage.setItem('duo_settings', JSON.stringify(persistedSettings));
   }, [settings]);
 
   useEffect(() => {
@@ -2752,18 +2754,22 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
             <span className="uppercase text-sm truncate max-w-[120px]">{charName}</span>
           </div>
           <div className="flex items-center gap-4 font-bold text-lg">
-            <div className="flex items-center gap-1 text-amber-500">
-              <Coins className="w-6 h-6" />
-              <span>{gold}</span>
-            </div>
-            <div className="flex items-center gap-1 text-fuchsia-600">
-              <Orbit className="w-6 h-6" />
-              <span>{mana}</span>
-            </div>
-            <div className="flex items-center gap-1 text-duo-red">
-              <Heart className="w-6 h-6 fill-current" />
-              <span>{hp}</span>
-            </div>
+            {gameState !== 'menu' && (
+              <>
+                <div className="flex items-center gap-1 text-amber-500">
+                  <Coins className="w-6 h-6" />
+                  <span>{gold}</span>
+                </div>
+                <div className="flex items-center gap-1 text-fuchsia-600">
+                  <Orbit className="w-6 h-6" />
+                  <span>{mana}</span>
+                </div>
+                <div className="flex items-center gap-1 text-duo-red">
+                  <Heart className="w-6 h-6 fill-current" />
+                  <span>{hp}</span>
+                </div>
+              </>
+            )}
             <button onClick={() => setShowSettings(true)} className="text-duo-gray-dark hover:text-duo-blue transition-colors ml-2">
               <Settings className="w-6 h-6" />
             </button>
@@ -4547,7 +4553,8 @@ Be creative and concise.`;
         {renderBottomBar()}
 
         {showSettings && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="fixed inset-0 bg-black/50 z-50 overflow-y-auto">
+            <div className="min-h-full flex items-center justify-center p-4">
             <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-xl border-b-4 border-gray-200">
               <h3 className="text-2xl font-black text-duo-text mb-6 text-center">Settings</h3>
               <div className="flex gap-2 mb-6">
@@ -4736,6 +4743,7 @@ Be creative and concise.`;
               >
                 Done
               </button>
+            </div>
             </div>
           </div>
         )}
