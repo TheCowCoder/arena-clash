@@ -291,7 +291,7 @@ async function startServer() {
   let matchmakingQueue: Record<string, QueuePlayer> = {};
   const rooms: Record<string, any> = {};
   const roomTimers: Record<string, { interval: NodeJS.Timeout; remaining: number }> = {};
-  const arenaPreparationTimers: Record<string, { interval: NodeJS.Timeout; stage: 'preview' | 'tweak'; remaining: number; skipVotes: string[] }> = {};
+  const arenaPreparationTimers: Record<string, { interval: NodeJS.Timeout; stage: 'preview' | 'tweak'; remaining: number; skipVotes: string[]; playerPaused: Record<string, boolean>; playerBonusSeconds: Record<string, number>; tweakDuration: number }> = {};
   const typingChannelMembers: Record<string, Set<string>> = {};
   const typingChannelBySocket: Record<string, string> = {};
   const typingTimeouts: Record<string, NodeJS.Timeout> = {};
@@ -794,12 +794,24 @@ async function startServer() {
     const timer = arenaPreparationTimers[roomId];
     if (!room || !timer) return;
 
+    // Compute per-player effective remaining during tweak stage
+    const playerRemaining: Record<string, number> = {};
+    if (timer.stage === 'tweak') {
+      const participantIds = getArenaPreparationParticipantIds(room);
+      for (const playerId of participantIds) {
+        const bonus = timer.playerBonusSeconds[playerId] || 0;
+        playerRemaining[playerId] = Math.max(0, timer.remaining + bonus);
+      }
+    }
+
     io.to(roomId).emit('arenaPreparationState', {
       roomId,
       players: room.players,
       isBotMatch: !!room.isBotMatch,
       stage: timer.stage,
       remaining: timer.remaining,
+      playerRemaining,
+      tweakDuration: timer.tweakDuration,
       skipVotes: timer.skipVotes,
     });
   };
@@ -889,7 +901,10 @@ async function startServer() {
     timer.stage = 'tweak';
     const tweakDuration = (typeof room.arenaTweakSeconds === 'number' && room.arenaTweakSeconds >= 1) ? room.arenaTweakSeconds : ARENA_TWEAK_SECONDS;
     timer.remaining = tweakDuration;
+    timer.tweakDuration = tweakDuration;
     timer.skipVotes = [];
+    timer.playerPaused = {};
+    timer.playerBonusSeconds = {};
     room.phase = 'tweak';
     for (const playerId of Object.keys(room.players)) {
       room.players[playerId].lockedIn = !!room.players[playerId].lockedIn || !!room.players[playerId]?.character?.isNpcAlly;
@@ -941,6 +956,9 @@ async function startServer() {
       stage: 'preview',
       remaining: previewDuration,
       skipVotes: [],
+      playerPaused: {},
+      playerBonusSeconds: {},
+      tweakDuration: 0,
     };
 
     emitArenaPreparationState(roomId);
@@ -952,14 +970,33 @@ async function startServer() {
 
       timer.remaining -= 1;
 
+      // During tweak stage, accumulate bonus seconds for paused players
+      if (timer.stage === 'tweak') {
+        for (const playerId of Object.keys(timer.playerPaused)) {
+          if (timer.playerPaused[playerId]) {
+            timer.playerBonusSeconds[playerId] = (timer.playerBonusSeconds[playerId] || 0) + 1;
+          }
+        }
+      }
+
       if (timer.remaining <= 0) {
         if (timer.stage === 'preview') {
           startArenaPreparationTweakStage(roomId);
           return;
         }
 
-        startBattleRoom(roomId);
-        return;
+        // During tweak: only start battle if all players' effective remaining <= 0 and none are paused
+        const participantIds = getArenaPreparationParticipantIds(activeRoom);
+        const allExpired = participantIds.every(playerId => {
+          const bonus = timer.playerBonusSeconds[playerId] || 0;
+          const effectiveRemaining = timer.remaining + bonus;
+          return effectiveRemaining <= 0 && !timer.playerPaused[playerId];
+        });
+
+        if (allExpired) {
+          startBattleRoom(roomId);
+          return;
+        }
       }
 
       emitArenaPreparationState(roomId);
@@ -2308,6 +2345,22 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       }
 
       emitArenaPreparationState(roomId);
+    });
+
+    socket.on("prepTimerPause", () => {
+      const roomId = players[socket.id]?.room;
+      if (!roomId) return;
+      const timer = arenaPreparationTimers[roomId];
+      if (!timer || timer.stage !== 'tweak') return;
+      timer.playerPaused[socket.id] = true;
+    });
+
+    socket.on("prepTimerResume", () => {
+      const roomId = players[socket.id]?.room;
+      if (!roomId) return;
+      const timer = arenaPreparationTimers[roomId];
+      if (!timer || timer.stage !== 'tweak') return;
+      timer.playerPaused[socket.id] = false;
     });
 
     socket.on("updateBotPreparationProfile", (data: { roomId?: string; botId: string; profileMarkdown: string }) => {

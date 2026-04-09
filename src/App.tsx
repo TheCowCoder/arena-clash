@@ -263,6 +263,8 @@ interface BattleMapState {
 interface ArenaPreparationState {
   stage: 'preview' | 'tweak';
   remaining: number;
+  playerRemaining: Record<string, number>;
+  tweakDuration: number;
   isBotMatch: boolean;
   skipVotes: string[];
 }
@@ -973,6 +975,19 @@ export default function App() {
   useEffect(() => { roomIdRef.current = roomId; }, [roomId]);
   const botDifficultyRef = useRef(botDifficulty);
   useEffect(() => { botDifficultyRef.current = botDifficulty; }, [botDifficulty]);
+
+  // Pause/resume the tweak-phase timer while the LLM is responding
+  useEffect(() => {
+    if (gameState !== 'arena_prep') return;
+    const isTweak = arenaPreparation?.stage === 'tweak' || !!(socket.id && players[socket.id || '']?.prepSkippedPreview);
+    if (!isTweak) return;
+    if (isWaitingForChar) {
+      socket.emit('prepTimerPause');
+    } else {
+      socket.emit('prepTimerResume');
+    }
+  }, [isWaitingForChar, gameState, arenaPreparation?.stage]);
+
   const arenaPreparationStageRef = useRef<ArenaPreparationState['stage'] | null>(null);
   const botPreparationRewriteRoomRef = useRef<string | null>(null);
 
@@ -994,7 +1009,8 @@ export default function App() {
     }
 
     setShowProfileModal(false);
-    setMessages([{ role: 'model', text: 'You have one rewrite window before the duel. Refine your legend now.' }]);
+    // Only show intro message if the user wasn't already in head-start rewrite mode
+    setMessages(prev => prev.length > 0 ? prev : [{ role: 'model', text: 'You have one rewrite window before the duel. Refine your legend now.' }]);
     setInputText('');
     setCharCreatorError(null);
     setCharCreatorRetryAttempt(0);
@@ -1217,13 +1233,15 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       setGameState('matchmaking');
     });
 
-    socket.on('arenaPreparationState', (data: { roomId: string; players: Record<string, any>; isBotMatch: boolean; stage: 'preview' | 'tweak'; remaining: number; skipVotes?: string[] }) => {
+    socket.on('arenaPreparationState', (data: { roomId: string; players: Record<string, any>; isBotMatch: boolean; stage: 'preview' | 'tweak'; remaining: number; playerRemaining?: Record<string, number>; tweakDuration?: number; skipVotes?: string[] }) => {
       setRoomId(data.roomId);
       setPlayers(data.players);
       setIsBotMatch(data.isBotMatch);
       setArenaPreparation({
         stage: data.stage,
         remaining: data.remaining,
+        playerRemaining: data.playerRemaining || {},
+        tweakDuration: data.tweakDuration || 0,
         isBotMatch: data.isBotMatch,
         skipVotes: data.skipVotes || [],
       });
@@ -3265,7 +3283,9 @@ Be creative and concise.`;
   const renderArenaPreparation = () => {
     const prepPlayers = Object.entries(players);
     const activeTypingIds = new Set([...roomTypingIds, ...localRoomTypingIds]);
-    const remaining = arenaPreparation?.remaining ?? 0;
+    const myId = socket.id || '';
+    const myPlayerRemaining = arenaPreparation?.playerRemaining?.[myId];
+    const remaining = (arenaPreparation?.stage === 'tweak' && myPlayerRemaining !== undefined) ? myPlayerRemaining : (arenaPreparation?.remaining ?? 0);
     const timerLabel = `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}`;
     const hasLocalRewriteAccess = !!(socket.id && players[socket.id]?.prepSkippedPreview);
     const isTweakStage = arenaPreparation?.stage === 'tweak' || hasLocalRewriteAccess;
@@ -3289,7 +3309,7 @@ Be creative and concise.`;
                   ? (isHeadStartRewrite
                     ? 'You started your rewrite early while the remaining preview countdown continues for anyone still reviewing.'
                     : 'You have one pass to refine your legend before the duel begins.')
-                  : 'Inspect every legend now. The rewrite window opens after the 15 second preview countdown or once everyone skips ahead.'}
+                  : ''}
               </p>
             </div>
             <div className={`rounded-2xl px-3 py-2 border text-center min-w-[88px] ${isTweakStage ? 'bg-yellow-50 text-yellow-700 border-yellow-200' : 'bg-blue-50 text-duo-blue border-blue-200'}`}>
@@ -3303,6 +3323,13 @@ Be creative and concise.`;
               const isLockedIn = !!player.lockedIn;
               const isTyping = activeTypingIds.has(id) && !isLockedIn;
               const canInspect = !isTweakStage || isMe;
+              const tweakTotal = arenaPreparation?.tweakDuration || 120;
+              const playerRem = arenaPreparation?.playerRemaining?.[id];
+              const effectiveRemaining = (isTweakStage && playerRem !== undefined) ? playerRem : (arenaPreparation?.remaining ?? 0);
+              const ringFraction = isTweakStage ? Math.max(0, Math.min(1, effectiveRemaining / tweakTotal)) : 1;
+              const ringRadius = 44;
+              const ringCircumference = 2 * Math.PI * ringRadius;
+              const ringOffset = ringCircumference * (1 - ringFraction);
               return (
                 <button
                   key={id}
@@ -3313,14 +3340,27 @@ Be creative and concise.`;
                   }}
                   className={`flex flex-col items-center gap-2 min-w-[96px] ${canInspect ? '' : 'opacity-80 cursor-default'}`}
                 >
-                  <div className={`relative w-20 h-20 rounded-full border-4 shadow-lg overflow-hidden ${isMe ? 'border-duo-green bg-duo-green/10' : 'border-duo-blue bg-duo-blue/10'}`}>
-                    {(isMe ? character?.imageUrl : player.character.imageUrl) ? (
-                      <img src={isMe ? character?.imageUrl : player.character.imageUrl} alt={player.character.name} className="w-full h-full object-cover" />
-                    ) : (
-                      <div className={`w-full h-full flex items-center justify-center text-2xl font-black ${isMe ? 'text-duo-green-dark' : 'text-duo-blue'}`}>
-                        {player.character.name.charAt(0).toUpperCase()}
-                      </div>
+                  <div className="relative w-[92px] h-[92px] flex items-center justify-center">
+                    {isTweakStage && !isLockedIn && (
+                      <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 92 92">
+                        <circle cx="46" cy="46" r={ringRadius} fill="none" stroke={isMe ? '#e5e7eb' : '#e5e7eb'} strokeWidth="4" />
+                        <circle cx="46" cy="46" r={ringRadius} fill="none"
+                          stroke={ringFraction > 0.25 ? (isMe ? '#58cc02' : '#1cb0f6') : '#ef4444'}
+                          strokeWidth="4" strokeLinecap="round"
+                          strokeDasharray={ringCircumference} strokeDashoffset={ringOffset}
+                          style={{ transition: 'stroke-dashoffset 1s linear, stroke 0.3s' }}
+                        />
+                      </svg>
                     )}
+                    <div className={`relative w-20 h-20 rounded-full border-4 shadow-lg overflow-hidden ${isMe ? 'border-duo-green bg-duo-green/10' : 'border-duo-blue bg-duo-blue/10'}`}>
+                      {(isMe ? character?.imageUrl : player.character.imageUrl) ? (
+                        <img src={isMe ? character?.imageUrl : player.character.imageUrl} alt={player.character.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className={`w-full h-full flex items-center justify-center text-2xl font-black ${isMe ? 'text-duo-green-dark' : 'text-duo-blue'}`}>
+                          {player.character.name.charAt(0).toUpperCase()}
+                        </div>
+                      )}
+                    </div>
                   </div>
                   <div className="text-center">
                     <div className="text-xs font-black text-duo-text truncate max-w-[90px]">{isMe ? 'You' : player.character.name}</div>
@@ -3350,7 +3390,7 @@ Be creative and concise.`;
             </div>
             <h3 className="text-xl font-black text-duo-text">Avatar Review Phase</h3>
             <p className="text-sm font-bold max-w-[22rem] mt-2">
-              Open every profile, compare strengths, and decide what needs changing before the rewrite phase begins.
+              Open every profile, find weaknesses, decide what needs changing in your profile. The 2 minute write period begins in {timerLabel}.
             </p>
             <button
               onClick={() => socket.emit('skipArenaPreparationPreview')}
@@ -3358,9 +3398,6 @@ Be creative and concise.`;
             >
               Start rewrite now
             </button>
-            <p className="text-[11px] font-bold max-w-[22rem] mt-2">
-              Skipping opens your rewrite phase immediately. Once every human player has skipped, the whole room advances to the shared write stage.
-            </p>
             {previewParticipantCount > 1 && previewSkippers > 0 && (
               <p className="text-[11px] font-bold max-w-[22rem] mt-1 text-duo-blue">
                 {previewSkippers} of {previewParticipantCount} human players already started rewriting.
@@ -3775,6 +3812,23 @@ Be creative and concise.`;
       .filter(player => player.id !== socket.id);
 
     const miniMarkerLayouts = layoutRepelledMarkers([
+      // "You" dot at current location
+      ...(currentLoc ? [{
+        id: 'mini-you',
+        anchorX: currentLoc.x * miniScaleX,
+        anchorY: currentLoc.y * miniScaleY,
+        width: 6,
+        height: 6,
+      }] : []),
+      // Location dots
+      ...discoveredLocations.map((loc: WorldLocation) => ({
+        id: `mini-dot-${loc.id}`,
+        anchorX: loc.x * miniScaleX,
+        anchorY: loc.y * miniScaleY,
+        width: loc.id === activeLocationId ? 4 : 3,
+        height: loc.id === activeLocationId ? 4 : 3,
+      })),
+      // Location labels
       ...discoveredLocations.map((loc: WorldLocation) => ({
         id: `mini-loc-${loc.id}`,
         anchorX: loc.x * miniScaleX,
@@ -3799,13 +3853,33 @@ Be creative and concise.`;
     ], { width: mapW, height: mapH });
 
     const fullMarkerLayouts = layoutRepelledMarkers([
+      // "You" marker at the current location
+      ...(currentLoc ? [{
+        id: 'full-you',
+        anchorX: currentLoc.x * fullScaleX,
+        anchorY: currentLoc.y * fullScaleY,
+        width: 28,
+        height: 28,
+      }] : []),
+      // Location dots (separate from labels to push them apart)
       ...discoveredLocations.map((loc: WorldLocation) => ({
-        id: `full-loc-${loc.id}`,
+        id: `full-dot-${loc.id}`,
         anchorX: loc.x * fullScaleX,
         anchorY: loc.y * fullScaleY,
-        width: estimateMarkerLabelWidth(loc.name, 44, 150, 6.8),
-        height: 26,
+        width: loc.id === activeLocationId ? 12 : 8,
+        height: loc.id === activeLocationId ? 12 : 8,
       })),
+      // Location labels
+      ...discoveredLocations.map((loc: WorldLocation) => {
+        const hasSubLabel = (loc.npcs?.length > 0 || loc.enemies?.length > 0);
+        return {
+          id: `full-loc-${loc.id}`,
+          anchorX: loc.x * fullScaleX,
+          anchorY: loc.y * fullScaleY,
+          width: estimateMarkerLabelWidth(loc.name, 44, 150, 6.8),
+          height: hasSubLabel ? 38 : 26,
+        };
+      }),
       ...visibleNpcs.map(npc => ({
         id: `full-npc-${npc.id}`,
         anchorX: npc.x * fullScaleX,
