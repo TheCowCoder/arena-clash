@@ -535,6 +535,8 @@ export default function App() {
       battleModel: 'gemini-2.5-pro',
       botModel: 'gemini-2.5-flash',
       unlimitedTurnTime: false,
+      arenaPreviewSeconds: 15,
+      arenaTweakSeconds: 120,
     };
     const saved = localStorage.getItem('duo_settings');
     if (saved) {
@@ -1557,8 +1559,8 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
             attempts++;
             const delay = getAIRetryDelaySeconds(attempts);
             setRetryAttempt(attempts);
-            setBattleError(`${errorInfo.label}. Retrying in ${delay}s...`);
-            upsertBattleStatusLog('battle-retry', `⚠️ ${errorInfo.label}. Retrying in **${delay}s**. Attempt **#${attempts}**...`);
+            setBattleError(`Waiting for model (${attempts})...`);
+            upsertBattleStatusLog('battle-retry', `⏳ Waiting for model (${attempts})...`);
             await new Promise(resolve => setTimeout(resolve, delay * 1000));
             continue;
           }
@@ -1921,6 +1923,8 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
               botName: enemyName,
               npcAllies,
               unlimitedTurnTime: settingsRef.current.unlimitedTurnTime,
+              arenaPreviewSeconds: settingsRef.current.arenaPreviewSeconds,
+              arenaTweakSeconds: settingsRef.current.arenaTweakSeconds,
             });
             toolBadges.push(`⚔️ **Combat Initiated** — engaging ${enemyName}!`);
           } else if (tc.name === 'move_to_location') {
@@ -1967,8 +1971,8 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     socket.on('explorationRetry', (data: { requestId: string; attempt: number; delay: number; label: string }) => {
       if (activeExplorationStreamIdRef.current && activeExplorationStreamIdRef.current !== data.requestId) return;
       setExplorationRetryAttempt(data.attempt);
-      setExplorationError(`${data.label}. Retrying in ${data.delay}s...`);
-      upsertExplorationStatusMessage('exploration-retry', `⚠️ ${data.label}. Retrying in **${data.delay}s**. Attempt **#${data.attempt}**...`);
+      setExplorationError(`Waiting for model (${data.attempt})...`);
+      upsertExplorationStatusMessage('exploration-retry', `⏳ Waiting for model (${data.attempt})...`);
       upsertExplorationStreamMessage(data.requestId, '', 'thought');
     });
 
@@ -2320,8 +2324,8 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
           attempts++;
           const delay = getAIRetryDelaySeconds(attempts);
           setCharCreatorRetryAttempt(attempts);
-          setCharCreatorError(`${errorInfo.label}. Retrying in ${delay}s...`);
-          upsertChatStatusMessage('char-creator-retry', `⚠️ ${errorInfo.label}. Retrying in **${delay}s**. Attempt **#${attempts}**...`);
+          setCharCreatorError(`Waiting for model (${attempts})...`);
+          upsertChatStatusMessage('char-creator-retry', `⏳ Waiting for model (${attempts})...`);
           await new Promise(resolve => setTimeout(resolve, delay * 1000));
           continue;
         }
@@ -2658,7 +2662,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       }
       return;
     }
-    socket.emit('enterArena', { unlimitedTurnTime: settingsRef.current.unlimitedTurnTime });
+    socket.emit('enterArena', { unlimitedTurnTime: settingsRef.current.unlimitedTurnTime, arenaPreviewSeconds: settingsRef.current.arenaPreviewSeconds, arenaTweakSeconds: settingsRef.current.arenaTweakSeconds });
   };
 
   const handleNewCharacter = () => {
@@ -3080,6 +3084,8 @@ Be creative and concise.`;
                     botProfile: selectedChar?.content,
                     botName: selectedChar?.name,
                     unlimitedTurnTime: settingsRef.current.unlimitedTurnTime,
+                    arenaPreviewSeconds: settingsRef.current.arenaPreviewSeconds,
+                    arenaTweakSeconds: settingsRef.current.arenaTweakSeconds,
                   });
                 }}
                 disabled={!selectedBotCharacter}
@@ -4448,6 +4454,8 @@ Be creative and concise.`;
                     botProfile,
                     botName: bot.name,
                     unlimitedTurnTime: settingsRef.current.unlimitedTurnTime,
+                    arenaPreviewSeconds: settingsRef.current.arenaPreviewSeconds,
+                    arenaTweakSeconds: settingsRef.current.arenaTweakSeconds,
                   });
                 }}
                 disabled={!character}
@@ -4687,6 +4695,36 @@ Be creative and concise.`;
                     </div>
                     <div className="mt-3 text-[11px] font-bold text-duo-gray-dark">
                       Current state: {settings.unlimitedTurnTime ? 'Timers disabled for new arena rooms' : 'Standard timed turns'}
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-duo-gray bg-duo-gray/30 p-4">
+                    <h4 className="text-sm font-black text-duo-text mb-2">Arena Phase Durations</h4>
+                    <p className="text-xs text-duo-gray-dark mb-3">
+                      Configure the read (preview) and write (tweak) phase timers for new arena matches.
+                    </p>
+                    <div className="flex gap-3">
+                      <div className="flex-1">
+                        <label className="block text-[11px] font-bold text-duo-gray-dark mb-1">Read Phase (s)</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={300}
+                          value={settings.arenaPreviewSeconds}
+                          onChange={e => setSettings({ ...settings, arenaPreviewSeconds: Math.max(1, Math.min(300, parseInt(e.target.value) || 15)) })}
+                          className="w-full bg-duo-gray rounded-xl px-3 py-2 font-bold text-duo-text text-sm focus:outline-none focus:ring-2 focus:ring-duo-blue"
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <label className="block text-[11px] font-bold text-duo-gray-dark mb-1">Write Phase (s)</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={600}
+                          value={settings.arenaTweakSeconds}
+                          onChange={e => setSettings({ ...settings, arenaTweakSeconds: Math.max(1, Math.min(600, parseInt(e.target.value) || 120)) })}
+                          className="w-full bg-duo-gray rounded-xl px-3 py-2 font-bold text-duo-text text-sm focus:outline-none focus:ring-2 focus:ring-duo-blue"
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>

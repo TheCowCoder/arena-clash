@@ -248,6 +248,8 @@ async function startServer() {
     character: any;
     isReady: boolean;
     unlimitedTurnTime?: boolean;
+    arenaPreviewSeconds?: number;
+    arenaTweakSeconds?: number;
   }
   let matchmakingQueue: Record<string, QueuePlayer> = {};
   const rooms: Record<string, any> = {};
@@ -848,7 +850,8 @@ async function startServer() {
     if (!room || !timer) return;
 
     timer.stage = 'tweak';
-    timer.remaining = ARENA_TWEAK_SECONDS;
+    const tweakDuration = (typeof room.arenaTweakSeconds === 'number' && room.arenaTweakSeconds >= 1) ? room.arenaTweakSeconds : ARENA_TWEAK_SECONDS;
+    timer.remaining = tweakDuration;
     timer.skipVotes = [];
     room.phase = 'tweak';
     for (const playerId of Object.keys(room.players)) {
@@ -895,10 +898,11 @@ async function startServer() {
       room.players[playerId].autoLockedThisTurn = false;
       room.players[playerId].prepSkippedPreview = !!room.isBotMatch && playerId.startsWith('bot_');
     }
+    const previewDuration = (typeof room.arenaPreviewSeconds === 'number' && room.arenaPreviewSeconds >= 1) ? room.arenaPreviewSeconds : ARENA_PREVIEW_SECONDS;
     arenaPreparationTimers[roomId] = {
       interval: null as any,
       stage: 'preview',
-      remaining: ARENA_PREVIEW_SECONDS,
+      remaining: previewDuration,
       skipVotes: [],
     };
 
@@ -2141,6 +2145,8 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         host: socket.id,
         isBotMatch: true,
         unlimitedTurnTime: !!data.unlimitedTurnTime,
+        arenaPreviewSeconds: typeof data.arenaPreviewSeconds === 'number' ? data.arenaPreviewSeconds : ARENA_PREVIEW_SECONDS,
+        arenaTweakSeconds: typeof data.arenaTweakSeconds === 'number' ? data.arenaTweakSeconds : ARENA_TWEAK_SECONDS,
         botDifficulty: difficulty,
         npcAllyIds: npcAllies.map((n: any) => `npc_ally_${n.id}`),
         players: roomPlayers,
@@ -2155,7 +2161,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       startArenaPreparation(roomId);
     });
 
-    socket.on("enterArena", (data?: { unlimitedTurnTime?: boolean }) => {
+    socket.on("enterArena", (data?: { unlimitedTurnTime?: boolean; arenaPreviewSeconds?: number; arenaTweakSeconds?: number }) => {
       if (!players[socket.id]?.character) {
         socket.emit("error", "Create a character first.");
         return;
@@ -2166,6 +2172,8 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         character: players[socket.id].character,
         isReady: false,
         unlimitedTurnTime: !!data?.unlimitedTurnTime,
+        arenaPreviewSeconds: typeof data?.arenaPreviewSeconds === 'number' ? data.arenaPreviewSeconds : undefined,
+        arenaTweakSeconds: typeof data?.arenaTweakSeconds === 'number' ? data.arenaTweakSeconds : undefined,
       };
       socket.join("matchmaking_lobby");
       io.to("matchmaking_lobby").emit("queueUpdated", Object.values(matchmakingQueue));
@@ -2199,6 +2207,8 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
             host: queueList[0].id,
             players: roomPlayers,
             unlimitedTurnTime: queueList.some(p => p.unlimitedTurnTime),
+            arenaPreviewSeconds: queueList.find(p => typeof p.arenaPreviewSeconds === 'number')?.arenaPreviewSeconds ?? ARENA_PREVIEW_SECONDS,
+            arenaTweakSeconds: queueList.find(p => typeof p.arenaTweakSeconds === 'number')?.arenaTweakSeconds ?? ARENA_TWEAK_SECONDS,
             isBotMatch: false,
             mapState: buildArenaBattleMapState(roomPlayers),
             phase: 'preview',
