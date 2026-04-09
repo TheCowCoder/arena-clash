@@ -953,8 +953,10 @@ async function startServer() {
     timer.playerBonusSeconds = {};
     room.phase = 'tweak';
     for (const playerId of Object.keys(room.players)) {
-      room.players[playerId].lockedIn = !!room.players[playerId]?.character?.isNpcAlly;
-      room.players[playerId].prepSkippedPreview = true;
+      const p = room.players[playerId];
+      // Keep bots locked in if they already locked during preview
+      p.lockedIn = !!p?.character?.isNpcAlly || (playerId.startsWith('bot_') && !!p.lockedIn);
+      p.prepSkippedPreview = true;
     }
     emitRoomPlayersUpdated(roomId);
     maybeAdvanceArenaPreparation(roomId);
