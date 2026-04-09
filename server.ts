@@ -217,10 +217,16 @@ async function startServer() {
       if (!username || !password) return res.status(400).json({ error: "Username and password required" });
       
       const user = await db.collection("users").findOne({ username: username.toLowerCase() });
-      if (!user) return res.status(401).json({ error: "Invalid credentials" });
+      if (!user) {
+        console.log(`[AUTH] Login failed: user "${username.toLowerCase()}" not found`);
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
       
       const validPassword = await bcrypt.compare(password, user.password);
-      if (!validPassword) return res.status(401).json({ error: "Invalid credentials" });
+      if (!validPassword) {
+        console.log(`[AUTH] Login failed: wrong password for "${username.toLowerCase()}" (hash starts: ${user.password?.slice(0, 7) || 'NO_HASH'})`);
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
       
       const token = jwt.sign({ userId: user._id.toString(), username: user.username }, JWT_SECRET, { expiresIn: '30d' });
       res.json({ token, username: user.username, displayName: user.displayName, characters: user.characters || [], activeCharacterIndex: user.activeCharacterIndex || 0 });
@@ -897,7 +903,7 @@ async function startServer() {
     if (!room?.players?.[playerId] || room.phase === 'battle') return;
 
     room.players[playerId].character = normalizedState;
-    if (room.phase === 'tweak') {
+    if (room.phase === 'tweak' || room.players[playerId]?.prepSkippedPreview) {
       clearTypingForSocket(playerId);
       lockArenaPreparationPlayer(roomId, playerId);
       return;
