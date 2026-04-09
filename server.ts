@@ -21,7 +21,7 @@ function getPrompt(filename: string) {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = parseInt(process.env.PORT || '3000', 10);
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
     cors: {
@@ -30,6 +30,13 @@ async function startServer() {
   });
 
   app.use(express.json({ limit: '25mb' }));
+  app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+  });
 
   const mergeStoredCharacterAvatars = (storedCharacters: any[], incomingCharacters: any[]) => {
     const storedByName = new Map((storedCharacters || []).map(character => [character.name, character]));

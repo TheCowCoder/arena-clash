@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: arena-clash-server
+    runtime: node
+    buildCommand: npm install
+    startCommand: npx tsx server.ts
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false

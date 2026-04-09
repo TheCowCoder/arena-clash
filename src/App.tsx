@@ -14,7 +14,8 @@ declare global {
   }
 }
 
-const socket: Socket = io();
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
+const socket: Socket = io(BACKEND_URL || undefined);
 
 type Tab = 'home' | 'profile' | 'social';
 type GameState = 'menu' | 'char_creation' | 'matchmaking' | 'arena_prep' | 'battle' | 'post_match' | 'exploration' | 'level_select';
@@ -542,13 +543,11 @@ export default function App() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        const validModels = ['gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash'];
-        
-        // Ensure any old/invalid models are reset to defaults so we don't silently request a maxed out model
-        if (parsed.charModel && !validModels.includes(parsed.charModel)) parsed.charModel = defaultSettings.charModel;
-        if (parsed.explorationModel && !validModels.includes(parsed.explorationModel)) parsed.explorationModel = defaultSettings.explorationModel;
-        if (parsed.battleModel && !validModels.includes(parsed.battleModel)) parsed.battleModel = defaultSettings.battleModel;
-        if (parsed.botModel && !validModels.includes(parsed.botModel)) parsed.botModel = defaultSettings.botModel;
+        // Strip model fields from localStorage — always use current defaults
+        delete parsed.charModel;
+        delete parsed.explorationModel;
+        delete parsed.battleModel;
+        delete parsed.botModel;
         
         return { ...defaultSettings, ...parsed };
       } catch (e) {
@@ -713,6 +712,7 @@ export default function App() {
   const [mapZoom, setMapZoom] = useState(1);
   const [mapPan, setMapPan] = useState({ x: 0, y: 0 });
   const mapDragRef = useRef<{ dragging: boolean; lastX: number; lastY: number }>({ dragging: false, lastX: 0, lastY: 0 });
+  const mapPinchRef = useRef<{ distance: number }>({ distance: 0 });
   const [showInventory, setShowInventory] = useState(false);
   const [showCharImage, setShowCharImage] = useState(false);
   const [isGeneratingCharImage, setIsGeneratingCharImage] = useState(false);
@@ -875,7 +875,7 @@ export default function App() {
     const syncKey = `${targetCharacter.name}:${targetCharacter.imageUrl.length}:${targetCharacter.imageUrl.slice(-48)}`;
     if (avatarSyncKeysRef.current[targetCharacter.name] === syncKey) return;
 
-    const res = await fetch('/api/account/character-avatar', {
+    const res = await fetch(`${BACKEND_URL}/api/account/character-avatar`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -924,7 +924,7 @@ export default function App() {
   }, [character]);
 
   useEffect(() => {
-    fetch('/api/bot_characters')
+    fetch(`${BACKEND_URL}/api/bot_characters`)
       .then(res => res.json())
       .then(data => {
         setBotCharacters(data);
@@ -935,7 +935,7 @@ export default function App() {
       .catch(err => console.error("Failed to load bot characters", err));
     
     // Load world data  
-    fetch('/api/world')
+    fetch(`${BACKEND_URL}/api/world`)
       .then(res => res.json())
       .then(data => { setWorldData(data); worldDataRef.current = data; })
       .catch(err => console.error("Failed to load world data", err));
@@ -1096,7 +1096,7 @@ export default function App() {
     setLocalRoomTypingIds(prev => prev.includes(botId) ? prev : [...prev, botId]);
     try {
       const aiClient = getAIClient();
-      const botPromptRes = await fetch('/api/prompts/bot_player.txt');
+      const botPromptRes = await fetch(`${BACKEND_URL}/api/prompts/bot_player.txt`);
       const botSysPrompt = await botPromptRes.text();
       
       const cleanLogs = battleLogsRef.current.filter(log => !log.startsWith("> **Judge's Thoughts:**"));
@@ -1162,7 +1162,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
               console.log("[Portrait Auto] Starting generation for:", state.name);
               setMessages(prev => [...prev, { role: 'system', text: '🎨 Generating portrait...', streamId: generationMessageId }]);
               const aiClient = getAIClient();
-              const prompt = `Generate a fantasy character portrait for: ${state.name}. ${state.profileMarkdown.substring(0, 500)}. Style: detailed digital art, fantasy RPG character portrait, vibrant colors.`;
+              const prompt = `Generate a fantasy character portrait for: ${state.name}. ${state.profileMarkdown.substring(0, 500)}. Style: detailed digital art, fantasy RPG character portrait, vibrant colors. Draw the character in their true form — they may be a creature, monster, spirit, or non-human entity. Do NOT default to humanoid. Do NOT include any text, stats, UI elements, health bars, or labels in the image.`;
               const imgRes = await aiClient.models.generateContent({
                 model: 'gemini-2.5-flash-image',
                 contents: prompt,
@@ -1315,7 +1315,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         profiles += `Profile for ${pData.character.name}:\n${pData.character.profileMarkdown}\n\n`;
       }
 
-      const sysPromptRes = await fetch('/api/prompts/battle_judge.txt');
+      const sysPromptRes = await fetch(`${BACKEND_URL}/api/prompts/battle_judge.txt`);
       const sysPrompt = await sysPromptRes.text();
       const fullSysPrompt = sysPrompt + "\n\n" + profiles;
 
@@ -2055,13 +2055,13 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
 
   // Check DB availability and load cloud characters on auth
   useEffect(() => {
-    fetch('/api/health').then(r => r.json()).then(d => setDbAvailable(!!d.dbConnected)).catch(() => {});
+    fetch(`${BACKEND_URL}/api/health`).then(r => r.json()).then(d => setDbAvailable(!!d.dbConnected)).catch(() => {});
   }, []);
 
   useEffect(() => {
     if (authToken) {
       // Load characters from cloud
-      fetch('/api/account/characters', {
+      fetch(`${BACKEND_URL}/api/account/characters`, {
         headers: { 'Authorization': `Bearer ${authToken}` }
       })
         .then(r => { if (!r.ok) throw new Error('Auth expired'); return r.json(); })
@@ -2091,7 +2091,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     setAuthError('');
     setAuthLoading(true);
     try {
-      const res = await fetch(`/api/auth/${authMode}`, {
+      const res = await fetch(`${BACKEND_URL}/api/auth/${authMode}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: authUsername, password: authPassword })
@@ -2137,7 +2137,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     if (!authToken || characters.length === 0) return;
     const activeIndex = character ? characters.findIndex(c => c.name === character.name) : 0;
     try {
-      const res = await fetch('/api/account/characters', {
+      const res = await fetch(`${BACKEND_URL}/api/account/characters`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
         body: JSON.stringify({ characters: stripCharacterImagesForCloud(characters), activeCharacterIndex: Math.max(0, activeIndex) })
@@ -2197,7 +2197,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     setCharCreatorRetryAttempt(0);
     clearChatStatusMessage('char-creator-retry');
     
-    const sysPromptRes = await fetch('/api/prompts/char_creator.txt');
+    const sysPromptRes = await fetch(`${BACKEND_URL}/api/prompts/char_creator.txt`);
     const sysPrompt = await sysPromptRes.text();
 
     let fullSysPrompt = sysPrompt;
@@ -2224,8 +2224,12 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       }
     };
 
-    // Format history for Gemini
-    const contents = newMessages.map(m => `${m.role === 'user' ? 'User' : 'Model'}: ${m.text}`).join('\n');
+    // Format history for Gemini — filter out system messages and use proper multi-turn format
+    const chatMessages = newMessages.filter(m => m.role !== 'system');
+    const contents = chatMessages.map(m => ({
+      role: m.role === 'user' ? 'user' : 'model',
+      parts: [{ text: m.text }]
+    }));
     const aiClient = getAIClient();
 
     const charApiConfig = {
@@ -2524,7 +2528,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     setMessages(prev => [...prev, { role: 'system', text: '🎨 Generating portrait... this may take a moment.', streamId: generationMessageId }]);
     try {
       const aiClient = getAIClient();
-      const prompt = `Generate a fantasy character portrait for: ${character.name}. ${character.profileMarkdown.substring(0, 500)}. Style: detailed digital art, fantasy RPG character portrait, vibrant colors.`;
+      const prompt = `Generate a fantasy character portrait for: ${character.name}. ${character.profileMarkdown.substring(0, 500)}. Style: detailed digital art, fantasy RPG character portrait, vibrant colors. Draw the character in their true form — they may be a creature, monster, spirit, or non-human entity. Do NOT default to humanoid. Do NOT include any text, stats, UI elements, health bars, or labels in the image.`;
       
       console.log("[Portrait] Sending request to gemini-3.1-pro-image-preview");
       const response = await aiClient.models.generateContent({
@@ -2872,7 +2876,7 @@ Be creative and concise.`;
       const nameMatch = content.match(/^#\s+(.+)$/m);
       const name = nameMatch ? nameMatch[1].trim() : `Bot_${Date.now()}`;
 
-      const res = await fetch('/api/bot_characters', {
+      const res = await fetch(`${BACKEND_URL}/api/bot_characters`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, content })
@@ -3659,7 +3663,7 @@ Be creative and concise.`;
             placeholder={isLockedIn ? "Waiting for opponent..." : "Describe your action..."}
             className="flex-1 bg-duo-gray rounded-2xl px-3 py-2 text-sm font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue resize-none overflow-y-auto"
             rows={1}
-            style={{ minHeight: '40px', maxHeight: '50vh' }}
+            style={{ minHeight: '40px', maxHeight: '50vh', fontSize: '16px' }}
             disabled={isLockedIn}
           />
           {isLockedIn ? (
@@ -3931,6 +3935,7 @@ Be creative and concise.`;
           <div className="fixed inset-0 z-50 bg-black/60" onClick={() => setShowFullMap(false)}>
             <div 
               className="absolute inset-4 bg-blue-900/95 rounded-3xl border-2 border-duo-gray overflow-hidden"
+              style={{ touchAction: 'none' }}
               onClick={(e) => e.stopPropagation()}
               onWheel={(e) => {
                 e.stopPropagation();
@@ -3959,6 +3964,26 @@ Be creative and concise.`;
                 setMapPan(p => ({ x: p.x + dx, y: p.y + dy }));
               }}
               onPointerUp={() => { mapDragRef.current.dragging = false; }}
+              onTouchStart={(e) => {
+                if (e.touches.length === 2) {
+                  const dx = e.touches[0].clientX - e.touches[1].clientX;
+                  const dy = e.touches[0].clientY - e.touches[1].clientY;
+                  mapPinchRef.current.distance = Math.hypot(dx, dy);
+                }
+              }}
+              onTouchMove={(e) => {
+                if (e.touches.length === 2) {
+                  const dx = e.touches[0].clientX - e.touches[1].clientX;
+                  const dy = e.touches[0].clientY - e.touches[1].clientY;
+                  const newDist = Math.hypot(dx, dy);
+                  const oldDist = mapPinchRef.current.distance;
+                  if (oldDist > 0) {
+                    const scale = newDist / oldDist;
+                    setMapZoom(z => Math.min(5, Math.max(0.5, z * scale)));
+                  }
+                  mapPinchRef.current.distance = newDist;
+                }
+              }}
             >
               <div className="absolute top-2 left-2 z-10 flex gap-1">
                 <button onClick={() => setMapZoom(z => Math.min(5, z + 0.3))} className="bg-white/90 rounded-full w-7 h-7 text-sm font-black text-blue-900 shadow">+</button>
@@ -3971,8 +3996,8 @@ Be creative and concise.`;
                   <Target className="w-3 h-3" /> Center
                 </button>
               </div>
-              <button onClick={() => setShowFullMap(false)} className="absolute top-2 right-2 z-10 bg-white rounded-full p-1.5 shadow">
-                <X className="w-4 h-4" />
+              <button onClick={() => setShowFullMap(false)} className="absolute top-3 right-3 z-10 bg-white rounded-full p-2.5 shadow-lg">
+                <X className="w-6 h-6" />
               </button>
               {/* Pannable/zoomable content */}
               <div style={{ transform: `translate(${mapPan.x}px, ${mapPan.y}px) scale(${mapZoom})`, transformOrigin: '0 0', position: 'absolute', inset: 0 }}>
@@ -4331,7 +4356,7 @@ Be creative and concise.`;
             placeholder={isExplorationLockedIn ? "Waiting for other players..." : "What do you do? (gather, craft, talk, explore...)"}
             className="flex-1 bg-duo-gray rounded-2xl px-3 py-2 text-sm font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue resize-none overflow-y-auto"
             rows={1}
-            style={{ minHeight: '40px', maxHeight: '50vh' }}
+            style={{ minHeight: '40px', maxHeight: '50vh', fontSize: '16px' }}
             disabled={isExplorationLockedIn}
           />
           {isExplorationLockedIn ? (
