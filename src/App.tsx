@@ -1192,7 +1192,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
               const aiClient = getAIClient();
               const prompt = `Generate a fantasy character portrait for: ${state.name}. ${state.profileMarkdown.substring(0, 500)}. Style: detailed digital art, fantasy RPG character portrait, vibrant colors. Draw the character in their true form — they may be a creature, monster, spirit, or non-human entity. Do NOT default to humanoid. Do NOT include any text, stats, UI elements, health bars, or labels in the image.`;
               const imgRes = await aiClient.models.generateContent({
-                model: 'gemini-2.5-flash-image',
+                model: 'gemini-3-pro-image-preview',
                 contents: prompt,
                 config: { responseModalities: ['IMAGE', 'TEXT'] },
               });
@@ -2622,7 +2622,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       const prompt = `Generate a scenic landscape illustration of: ${loc.name}. ${loc.description}. Style: fantasy RPG environment art, wide landscape, atmospheric lighting, detailed.`;
       
       const response = await aiClient.models.generateContent({
-        model: 'gemini-2.5-flash-image',
+        model: 'gemini-3-pro-image-preview',
         contents: prompt,
         config: {
           responseModalities: ['IMAGE', 'TEXT'],
@@ -2655,17 +2655,20 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     setIsGeneratingBattleImage(true);
     try {
       const aiClient = getAIClient();
-      // Get the last few battle log entries for scene context
+      // Get battle log entries for scene context — filter out status/stream markers
       const recentLogs = battleLogs
-        .filter(l => !l.startsWith('STREAMING_') && !l.startsWith('>') && !l.startsWith('PLAYER_ACTIONS_') && !l.startsWith(BATTLE_PENDING_ACTION_PREFIX))
-        .slice(-3)
+        .filter(l => !l.startsWith('STREAMING_') && !l.startsWith('>') && !l.startsWith('PLAYER_ACTIONS_') && !l.startsWith(BATTLE_PENDING_ACTION_PREFIX) && !l.startsWith('STATUS_IMAGE'))
+        .slice(-5)
         .join('\n')
-        .substring(0, 500);
-      const playerNames = Object.values(players).map((p: any) => p.character.name).join(' vs ');
-      const prompt = `Generate a dynamic battle scene illustration: ${playerNames}. Recent events: ${recentLogs}. Style: fantasy RPG battle art, dramatic action poses, magical effects, vibrant colors.`;
-      
+        .substring(0, 1200);
+      const playerDescriptions = Object.values(players).map((p: any) => {
+        const c = p.character;
+        return `${c.name} (HP: ${c.hp}/${c.maxHp}, Mana: ${c.mana}/${c.maxMana})`;
+      }).join(' vs ');
+      const prompt = `Generate a dramatic battle scene illustration showing exactly what just happened:\n\nCombatants: ${playerDescriptions}\n\nRecent battle events:\n${recentLogs}\n\nStyle: Dynamic fantasy RPG battle art. Show the specific attacks, spells, and effects described in the events. Dramatic action poses, magical effects, particle effects, vibrant colors, cinematic composition. No text, no UI, no health bars, no labels.`;
+
       const response = await aiClient.models.generateContent({
-        model: 'gemini-3.1-pro-image-preview',
+        model: 'gemini-3-pro-image-preview',
         contents: prompt,
         config: {
           responseModalities: ['IMAGE', 'TEXT'],
@@ -3134,6 +3137,7 @@ Be creative and concise.`;
                     difficulty: difficultyLabels[botDifficulty],
                     botProfile: selectedChar?.content,
                     botName: selectedChar?.name,
+                    botCharacterId: selectedChar?.id,
                     unlimitedTurnTime: settingsRef.current.unlimitedTurnTime,
                     arenaPreviewSeconds: settingsRef.current.arenaPreviewSeconds,
                     arenaTweakSeconds: settingsRef.current.arenaTweakSeconds,

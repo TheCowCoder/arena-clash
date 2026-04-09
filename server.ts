@@ -117,28 +117,64 @@ async function startServer() {
     fs.mkdirSync(botCharsDir, { recursive: true });
   }
 
-  app.get("/api/bot_characters", (req, res) => {
+  // Seed bot characters into MongoDB from filesystem (on first run)
+  if (db) {
+    const botCharsCollection = db.collection("bot_characters");
+    const existingCount = await botCharsCollection.countDocuments();
+    if (existingCount === 0) {
+      try {
+        const files = fs.readdirSync(botCharsDir).filter(f => f.endsWith('.md'));
+        const docs = files.map(f => {
+          const content = fs.readFileSync(path.join(botCharsDir, f), "utf-8");
+          const nameMatch = content.match(/^#\s+(.+)$/m);
+          const name = nameMatch ? nameMatch[1].trim() : f.replace('.md', '');
+          return { _id: f, name, content };
+        });
+        if (docs.length > 0) {
+          await botCharsCollection.insertMany(docs as any[]);
+          console.log(`Seeded ${docs.length} bot characters into MongoDB`);
+        }
+      } catch (e) {
+        console.error("Failed to seed bot characters:", e);
+      }
+    }
+  }
+
+  app.get("/api/bot_characters", async (req, res) => {
     try {
-      const files = fs.readdirSync(botCharsDir).filter(f => f.endsWith('.md'));
-      const chars = files.map(f => {
-        const content = fs.readFileSync(path.join(botCharsDir, f), "utf-8");
-        const nameMatch = content.match(/^#\s+(.+)$/m);
-        const name = nameMatch ? nameMatch[1].trim() : f.replace('.md', '');
-        return { id: f, name, content };
-      });
-      res.json(chars);
+      if (db) {
+        const chars = await db.collection("bot_characters").find({}).toArray();
+        res.json(chars.map(c => ({ id: c._id, name: c.name, content: c.content })));
+      } else {
+        const files = fs.readdirSync(botCharsDir).filter(f => f.endsWith('.md'));
+        const chars = files.map(f => {
+          const content = fs.readFileSync(path.join(botCharsDir, f), "utf-8");
+          const nameMatch = content.match(/^#\s+(.+)$/m);
+          const name = nameMatch ? nameMatch[1].trim() : f.replace('.md', '');
+          return { id: f, name, content };
+        });
+        res.json(chars);
+      }
     } catch (e) {
       res.status(500).json({ error: "Failed to load bot characters" });
     }
   });
 
-  app.post("/api/bot_characters", (req, res) => {
+  app.post("/api/bot_characters", async (req, res) => {
     try {
       const { name, content } = req.body;
       if (!name || !content) return res.status(400).json({ error: "Missing name or content" });
-      const filename = name.toLowerCase().replace(/[^a-z0-9]+/g, '_') + '.md';
-      fs.writeFileSync(path.join(botCharsDir, filename), content);
-      res.json({ id: filename, name, content });
+      const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '_') + '.md';
+      if (db) {
+        await db.collection("bot_characters").updateOne(
+          { _id: id as any },
+          { $set: { name, content, updatedAt: new Date() } },
+          { upsert: true }
+        );
+      } else {
+        fs.writeFileSync(path.join(botCharsDir, id), content);
+      }
+      res.json({ id, name, content });
     } catch (e) {
       res.status(500).json({ error: "Failed to save bot character" });
     }
@@ -2218,6 +2254,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         id: roomId,
         host: socket.id,
         isBotMatch: true,
+        botCharacterId: data.botCharacterId || null,
         unlimitedTurnTime: !!data.unlimitedTurnTime,
         arenaPreviewSeconds: typeof data.arenaPreviewSeconds === 'number' ? data.arenaPreviewSeconds : ARENA_PREVIEW_SECONDS,
         arenaTweakSeconds: typeof data.arenaTweakSeconds === 'number' ? data.arenaTweakSeconds : ARENA_TWEAK_SECONDS,
@@ -2363,7 +2400,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       timer.playerPaused[socket.id] = false;
     });
 
-    socket.on("updateBotPreparationProfile", (data: { roomId?: string; botId: string; profileMarkdown: string }) => {
+    socket.on("updateBotPreparationProfile", async (data: { roomId?: string; botId: string; profileMarkdown: string }) => {
       const roomId = players[socket.id]?.room || data.roomId;
       if (!roomId) return;
 
@@ -2373,10 +2410,24 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       const botPlayer = room.players[data.botId];
       if (!botPlayer?.character || typeof data.profileMarkdown !== 'string' || !data.profileMarkdown.trim()) return;
 
+      const newProfile = data.profileMarkdown.trim();
+
       applyPreparationCharacterUpdate(roomId, data.botId, {
         ...botPlayer.character,
-        profileMarkdown: data.profileMarkdown.trim(),
+        profileMarkdown: newProfile,
       });
+
+      // Persist rewritten bot profile to MongoDB
+      if (db && room.botCharacterId) {
+        try {
+          await db.collection("bot_characters").updateOne(
+            { _id: room.botCharacterId as any },
+            { $set: { content: newProfile, updatedAt: new Date() } }
+          );
+        } catch (e) {
+          console.error("Failed to persist bot rewrite:", e);
+        }
+      }
     });
 
     socket.on("botAction", (data) => {
