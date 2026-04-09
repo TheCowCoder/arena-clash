@@ -3187,7 +3187,7 @@ Be creative and concise.`;
   const renderMenu = () => (
     <div className="flex-1 flex flex-col items-center p-6 gap-8 overflow-y-auto">
       <div className="text-center space-y-2">
-        <h1 className="text-3xl font-black text-duo-text tracking-tight">What If</h1>
+        <h1 className="text-8xl font-black text-duo-text tracking-tight">What If</h1>
         <p className="text-duo-gray-dark font-bold">Learn to fight. Forever.</p>
       </div>
 
