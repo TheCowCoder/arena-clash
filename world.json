@@ -2,12 +2,31 @@
   "meta": {
     "name": "The Shattered Isles",
     "description": "A chain of volcanic islands scattered across an emerald sea, each hiding ancient secrets and warring tribes.",
-    "gridSize": { "width": 60, "height": 60 },
+    "gridSize": {
+      "width": 60,
+      "height": 60
+    },
     "spawnPoints": [
-      { "x": 8, "y": 13, "locationId": "driftwood_beach" },
-      { "x": 30, "y": 25, "locationId": "coral_clearing" },
-      { "x": 42, "y": 48, "locationId": "ashen_shore" },
-      { "x": 12, "y": 43, "locationId": "misty_grove" }
+      {
+        "x": 8,
+        "y": 13,
+        "locationId": "driftwood_beach"
+      },
+      {
+        "x": 30,
+        "y": 25,
+        "locationId": "coral_clearing"
+      },
+      {
+        "x": 42,
+        "y": 48,
+        "locationId": "ashen_shore"
+      },
+      {
+        "x": 12,
+        "y": 43,
+        "locationId": "misty_grove"
+      }
     ]
   },
   "islands": [
@@ -15,56 +34,96 @@
       "id": "verdant_isle",
       "name": "Verdant Isle",
       "description": "A lush tropical island covered in dense jungle. The largest of the Shattered Isles.",
-      "bounds": { "x": 1, "y": 2, "width": 14, "height": 12 },
+      "bounds": {
+        "x": 1,
+        "y": 2,
+        "width": 14,
+        "height": 12
+      },
       "biome": "tropical_jungle"
     },
     {
       "id": "coral_atoll",
       "name": "Coral Atoll",
       "description": "A ring of coral formations surrounding a shallow lagoon. Sea creatures and traders gather here.",
-      "bounds": { "x": 20, "y": 14, "width": 12, "height": 12 },
+      "bounds": {
+        "x": 20,
+        "y": 14,
+        "width": 12,
+        "height": 12
+      },
       "biome": "coral_reef"
     },
     {
       "id": "obsidian_peaks",
       "name": "Obsidian Peaks",
       "description": "Jagged volcanic mountains still smoking with geothermal activity. Rich in rare minerals.",
-      "bounds": { "x": 42, "y": 38, "width": 14, "height": 12 },
+      "bounds": {
+        "x": 42,
+        "y": 38,
+        "width": 14,
+        "height": 12
+      },
       "biome": "volcanic"
     },
     {
       "id": "mistwood_isle",
       "name": "Mistwood Isle",
       "description": "A fog-shrouded island of ancient twisted trees. Strange whispers echo through the mist.",
-      "bounds": { "x": 1, "y": 38, "width": 14, "height": 12 },
+      "bounds": {
+        "x": 1,
+        "y": 38,
+        "width": 14,
+        "height": 12
+      },
       "biome": "enchanted_forest"
     },
     {
       "id": "sun_reef",
       "name": "Sun Reef",
       "description": "Shallow sun-bleached coral platforms that form natural bridges between islands.",
-      "bounds": { "x": 22, "y": 30, "width": 12, "height": 8 },
+      "bounds": {
+        "x": 22,
+        "y": 30,
+        "width": 12,
+        "height": 8
+      },
       "biome": "reef_bridges"
     },
     {
       "id": "skyspire_island",
       "name": "Skyspire Island",
       "description": "A solitary peak rising impossibly high, its summit often hidden in clouds. The ancients built a temple at its peak.",
-      "bounds": { "x": 46, "y": 1, "width": 13, "height": 10 },
+      "bounds": {
+        "x": 46,
+        "y": 1,
+        "width": 13,
+        "height": 10
+      },
       "biome": "mountain"
     },
     {
       "id": "tide_flats",
       "name": "Tide Flats",
       "description": "Vast shallow salt flats that appear and disappear with the tides. Treacherous but rich in shellfish.",
-      "bounds": { "x": 18, "y": 0, "width": 12, "height": 8 },
+      "bounds": {
+        "x": 18,
+        "y": 0,
+        "width": 12,
+        "height": 8
+      },
       "biome": "salt_flats"
     },
     {
       "id": "ember_chain",
       "name": "Ember Chain",
       "description": "A series of small volcanic islets connected by lava bridges. Home to fire tribes.",
-      "bounds": { "x": 36, "y": 18, "width": 10, "height": 10 },
+      "bounds": {
+        "x": 36,
+        "y": 18,
+        "width": 10,
+        "height": 10
+      },
       "biome": "volcanic"
     }
   ],
@@ -73,433 +132,1926 @@
       "id": "driftwood_beach",
       "name": "Driftwood Beach",
       "description": "A serene beach littered with weathered driftwood and sea glass. The gentle waves bring treasures from distant lands.",
-      "x": 8, "y": 13,
+      "x": 8,
+      "y": 13,
       "islandId": "verdant_isle",
       "type": "beach",
-      "resources": ["driftwood", "sea_glass", "coconut", "fresh_water"],
-      "connections": ["jungle_path", "fishing_cove"],
+      "resources": [
+        "driftwood",
+        "sea_glass",
+        "coconut",
+        "fresh_water"
+      ],
+      "connections": [
+        "jungle_path",
+        "fishing_cove"
+      ],
       "npcs": [],
-      "enemies": []
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "driftwood_beach_shore",
+          "name": "Driftwood Shore",
+          "description": "Sandy beach scattered with weathered driftwood and glimmering sea glass catching the light.",
+          "connections": [
+            "driftwood_beach_tide_pools",
+            "driftwood_beach_shipwreck"
+          ]
+        },
+        {
+          "id": "driftwood_beach_tide_pools",
+          "name": "Tide Pools",
+          "description": "Shallow pools teeming with starfish, anemones, and iridescent shells in the rocky shallows.",
+          "connections": [
+            "driftwood_beach_shore",
+            "driftwood_beach_shipwreck"
+          ]
+        },
+        {
+          "id": "driftwood_beach_shipwreck",
+          "name": "Shipwreck Hollow",
+          "description": "Half-buried wooden hull weathered by centuries, now a weathered monument to lost voyages.",
+          "connections": [
+            "driftwood_beach_shore",
+            "driftwood_beach_tide_pools"
+          ]
+        },
+        {
+          "id": "driftwood_beach_inlet",
+          "name": "Moon Inlet",
+          "description": "Hidden sandy inlet with smooth river-polished stones forming a crescent cove.",
+          "connections": [
+            "driftwood_beach_shore"
+          ]
+        }
+      ]
     },
     {
       "id": "jungle_path",
       "name": "Jungle Path",
       "description": "A narrow winding trail through dense tropical foliage. Colorful birds call from the canopy above.",
-      "x": 2, "y": 8,
+      "x": 2,
+      "y": 8,
       "islandId": "verdant_isle",
       "type": "trail",
-      "resources": ["vine", "tropical_fruit", "medicinal_herb"],
-      "connections": ["driftwood_beach", "village_of_tides", "ancient_ruins"],
+      "resources": [
+        "vine",
+        "tropical_fruit",
+        "medicinal_herb"
+      ],
+      "connections": [
+        "driftwood_beach",
+        "village_of_tides",
+        "ancient_ruins"
+      ],
       "npcs": [],
-      "enemies": ["jungle_spider"]
+      "enemies": [
+        "jungle_spider"
+      ],
+      "subZones": [
+        {
+          "id": "jungle_path_entrance",
+          "name": "Trailhead",
+          "description": "Overgrown path marked by ancient stone pillars nearly consumed by jungle growth.",
+          "connections": [
+            "jungle_path_deepwoods",
+            "jungle_path_canopy"
+          ]
+        },
+        {
+          "id": "jungle_path_deepwoods",
+          "name": "Deep Jungle",
+          "description": "Shadowy heart of the jungle where massive trees block out the sky entirely.",
+          "connections": [
+            "jungle_path_entrance",
+            "jungle_path_waterfall"
+          ]
+        },
+        {
+          "id": "jungle_path_canopy",
+          "name": "Canopy Platform",
+          "description": "Sunlit clearing created by fallen trees, vines creating natural hanging gardens.",
+          "connections": [
+            "jungle_path_entrance",
+            "jungle_path_waterfall"
+          ]
+        },
+        {
+          "id": "jungle_path_waterfall",
+          "name": "Cascade Falls",
+          "description": "Misty clearing where a thundering tropical waterfall crashes into a crystal pool.",
+          "connections": [
+            "jungle_path_deepwoods",
+            "jungle_path_canopy"
+          ]
+        }
+      ]
     },
     {
       "id": "village_of_tides",
       "name": "Village of Tides",
       "description": "A bustling village built on stilts over the shallows. The Tide Tribe trades fish and pearls here.",
-      "x": 8, "y": 8,
+      "x": 8,
+      "y": 8,
       "islandId": "verdant_isle",
       "type": "village",
-      "resources": ["fish", "pearl", "rope", "fresh_water"],
-      "connections": ["jungle_path", "tribal_elder_hut", "market_square"],
-      "npcs": ["elder_kai"],
-      "enemies": []
+      "resources": [
+        "fish",
+        "pearl",
+        "rope",
+        "fresh_water"
+      ],
+      "connections": [
+        "jungle_path",
+        "tribal_elder_hut",
+        "market_square"
+      ],
+      "npcs": [
+        "elder_kai"
+      ],
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "village_of_tides_plaza",
+          "name": "Central Plaza",
+          "description": "Bustling gathering square on interconnected wooden platforms above tidal waters.",
+          "connections": [
+            "village_of_tides_homes",
+            "village_of_tides_market"
+          ]
+        },
+        {
+          "id": "village_of_tides_homes",
+          "name": "Residential Stilts",
+          "description": "Stilt houses connected by weathered bridges swaying gently with the tide.",
+          "connections": [
+            "village_of_tides_plaza",
+            "village_of_tides_docks"
+          ]
+        },
+        {
+          "id": "village_of_tides_market",
+          "name": "Trading Square",
+          "description": "Open-air market with vendors hawking fresh catch and woven goods under fabric canopies.",
+          "connections": [
+            "village_of_tides_plaza",
+            "village_of_tides_docks"
+          ]
+        },
+        {
+          "id": "village_of_tides_docks",
+          "name": "Fishing Docks",
+          "description": "Wooden piers where fishing boats rock in rhythmic synchrony with the tide.",
+          "connections": [
+            "village_of_tides_homes",
+            "village_of_tides_market"
+          ]
+        }
+      ]
     },
     {
       "id": "tribal_elder_hut",
       "name": "Elder Kai's Hut",
       "description": "A large wooden hut decorated with shells and bones. Smoke rises from incense burners within.",
-      "x": 13, "y": 3,
+      "x": 13,
+      "y": 3,
       "islandId": "verdant_isle",
       "type": "building",
       "resources": [],
-      "connections": ["village_of_tides"],
-      "npcs": ["elder_kai"],
-      "enemies": []
+      "connections": [
+        "village_of_tides"
+      ],
+      "npcs": [
+        "elder_kai"
+      ],
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "tribal_elder_hut_entrance",
+          "name": "Bone Gateway",
+          "description": "Arched entrance adorned with intricate bone sculptures and shell inlays leading inward.",
+          "connections": [
+            "tribal_elder_hut_main_hall",
+            "tribal_elder_hut_shrine"
+          ]
+        },
+        {
+          "id": "tribal_elder_hut_main_hall",
+          "name": "Gathering Hall",
+          "description": "Large central room with shell-inlaid floors creating intricate spiral patterns beneath.",
+          "connections": [
+            "tribal_elder_hut_entrance",
+            "tribal_elder_hut_storage"
+          ]
+        },
+        {
+          "id": "tribal_elder_hut_shrine",
+          "name": "Sacred Shrine",
+          "description": "Sacred alcove glowing with ancestral bones, feathers, and offerings to spirits.",
+          "connections": [
+            "tribal_elder_hut_entrance"
+          ]
+        },
+        {
+          "id": "tribal_elder_hut_storage",
+          "name": "Sacred Storage",
+          "description": "Back chamber filled with ritual objects, herbs, and ceremonial supplies.",
+          "connections": [
+            "tribal_elder_hut_main_hall"
+          ]
+        }
+      ]
     },
     {
       "id": "market_square",
       "name": "Market Square",
       "description": "A lively open-air market where merchants hawk wares from across the isles. You can trade resources here.",
-      "x": 13, "y": 8,
+      "x": 13,
+      "y": 8,
       "islandId": "verdant_isle",
       "type": "market",
       "resources": [],
-      "connections": ["village_of_tides", "harbor"],
-      "npcs": ["merchant_lira"],
-      "enemies": []
+      "connections": [
+        "village_of_tides",
+        "harbor"
+      ],
+      "npcs": [
+        "merchant_lira"
+      ],
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "market_square_center",
+          "name": "Main Market",
+          "description": "Bustling central plaza with merchants shouting and goods piled high on wooden stalls.",
+          "connections": [
+            "market_square_produce",
+            "market_square_crafts"
+          ]
+        },
+        {
+          "id": "market_square_produce",
+          "name": "Produce District",
+          "description": "Fragrant section overflowing with tropical fruits, vegetables, and exotic spices.",
+          "connections": [
+            "market_square_center",
+            "market_square_butcher"
+          ]
+        },
+        {
+          "id": "market_square_crafts",
+          "name": "Artisan Alley",
+          "description": "Section dedicated to handmade goods, trinkets, and woven crafts of local artisans.",
+          "connections": [
+            "market_square_center",
+            "market_square_butcher"
+          ]
+        },
+        {
+          "id": "market_square_butcher",
+          "name": "Butcher's Quarter",
+          "description": "Sections with fish vendors and meat stalls serving the culinary needs of the region.",
+          "connections": [
+            "market_square_produce",
+            "market_square_crafts"
+          ]
+        }
+      ]
     },
     {
       "id": "harbor",
       "name": "Verdant Harbor",
       "description": "Small wooden docks where fishing boats and rafts are moored. Some brave sailors offer passage between islands.",
-      "x": 13, "y": 13,
+      "x": 13,
+      "y": 13,
       "islandId": "verdant_isle",
       "type": "harbor",
-      "resources": ["rope", "fish"],
-      "connections": ["market_square", "coral_clearing", "tide_crossing"],
-      "npcs": ["captain_rook"],
-      "enemies": []
+      "resources": [
+        "rope",
+        "fish"
+      ],
+      "connections": [
+        "market_square",
+        "coral_clearing",
+        "tide_crossing"
+      ],
+      "npcs": [
+        "captain_rook"
+      ],
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "harbor_docks",
+          "name": "Main Pier",
+          "description": "Weathered wooden docks bustling with sailors, cargo, and the calls of seabirds.",
+          "connections": [
+            "harbor_warehouses",
+            "harbor_shipyard"
+          ]
+        },
+        {
+          "id": "harbor_warehouses",
+          "name": "Cargo Warehouses",
+          "description": "Stacked crates and storage structures filled with goods awaiting trade and transport.",
+          "connections": [
+            "harbor_docks",
+            "harbor_tavern"
+          ]
+        },
+        {
+          "id": "harbor_shipyard",
+          "name": "Shipyard",
+          "description": "Area of rope coils, timber stacked high, and craftspeople engaged in repair work.",
+          "connections": [
+            "harbor_docks",
+            "harbor_tavern"
+          ]
+        },
+        {
+          "id": "harbor_tavern",
+          "name": "Anchor's Rest",
+          "description": "Rustic waterfront inn filled with salty characters, sea stories, and spiced beverages.",
+          "connections": [
+            "harbor_warehouses",
+            "harbor_shipyard"
+          ]
+        }
+      ]
     },
     {
       "id": "ancient_ruins",
       "name": "Ancient Ruins",
       "description": "Crumbling stone pillars and overgrown temples from a forgotten civilization. Strange glyphs glow faintly at night.",
-      "x": 8, "y": 3,
+      "x": 8,
+      "y": 3,
       "islandId": "verdant_isle",
       "type": "ruins",
-      "resources": ["ancient_stone", "glyph_fragment"],
-      "connections": ["jungle_path", "hidden_cave"],
+      "resources": [
+        "ancient_stone",
+        "glyph_fragment"
+      ],
+      "connections": [
+        "jungle_path",
+        "hidden_cave"
+      ],
       "npcs": [],
-      "enemies": ["stone_guardian"]
+      "enemies": [
+        "stone_guardian"
+      ],
+      "subZones": [
+        {
+          "id": "ancient_ruins_entrance",
+          "name": "Stone Gateway",
+          "description": "Weathered stone gateway carved with faded inscriptions, now covered in creeping vines.",
+          "connections": [
+            "ancient_ruins_central_plaza",
+            "ancient_ruins_temple"
+          ]
+        },
+        {
+          "id": "ancient_ruins_central_plaza",
+          "name": "Central Plaza",
+          "description": "Open courtyard littered with toppled pillars and moss-covered stepping stones.",
+          "connections": [
+            "ancient_ruins_entrance",
+            "ancient_ruins_archives"
+          ]
+        },
+        {
+          "id": "ancient_ruins_temple",
+          "name": "Crumbling Temple",
+          "description": "Sanctuary with faded murals depicting ancient rituals on weathered stone walls.",
+          "connections": [
+            "ancient_ruins_entrance",
+            "ancient_ruins_central_plaza"
+          ]
+        },
+        {
+          "id": "ancient_ruins_archives",
+          "name": "Hidden Archives",
+          "description": "Underground chamber preserving weathered scrolls and carved stone records of ages past.",
+          "connections": [
+            "ancient_ruins_central_plaza",
+            "ancient_ruins_chamber"
+          ]
+        },
+        {
+          "id": "ancient_ruins_chamber",
+          "name": "Sealed Sanctum",
+          "description": "Ritual chamber deep below containing strange symbols and evidence of forgotten ceremonies.",
+          "connections": [
+            "ancient_ruins_archives"
+          ]
+        }
+      ]
     },
     {
       "id": "hidden_cave",
       "name": "Hidden Cave",
       "description": "A concealed cave behind a waterfall. Inside, pools of luminescent water cast an eerie blue glow.",
-      "x": 2, "y": 3,
+      "x": 2,
+      "y": 3,
       "islandId": "verdant_isle",
       "type": "cave",
-      "resources": ["glowstone", "crystal_shard", "fresh_water"],
-      "connections": ["ancient_ruins"],
-      "npcs": ["hermit_zara"],
-      "enemies": ["cave_bat"]
+      "resources": [
+        "glowstone",
+        "crystal_shard",
+        "fresh_water"
+      ],
+      "connections": [
+        "ancient_ruins"
+      ],
+      "npcs": [
+        "hermit_zara"
+      ],
+      "enemies": [
+        "cave_bat"
+      ],
+      "subZones": [
+        {
+          "id": "hidden_cave_waterfall",
+          "name": "Waterfall Veil",
+          "description": "Shimmering cascade of water that conceals the cave mouth from unsuspecting travelers.",
+          "connections": [
+            "hidden_cave_main_chamber",
+            "hidden_cave_underground_lake"
+          ]
+        },
+        {
+          "id": "hidden_cave_main_chamber",
+          "name": "Luminescent Cavern",
+          "description": "Vast cavern ceiling glowing with bioluminescent fungi creating an enchanted atmosphere.",
+          "connections": [
+            "hidden_cave_waterfall",
+            "hidden_cave_crystal_grotto"
+          ]
+        },
+        {
+          "id": "hidden_cave_underground_lake",
+          "name": "Glowing Pool",
+          "description": "Still luminescent waters perfectly mirroring glowing crystal formations above.",
+          "connections": [
+            "hidden_cave_waterfall",
+            "hidden_cave_main_chamber"
+          ]
+        },
+        {
+          "id": "hidden_cave_crystal_grotto",
+          "name": "Crystal Grotto",
+          "description": "Branch chamber hung with glowing crystals that hum faintly with ancient magic.",
+          "connections": [
+            "hidden_cave_main_chamber"
+          ]
+        }
+      ]
     },
     {
       "id": "fishing_cove",
       "name": "Fishing Cove",
       "description": "A sheltered cove with calm clear water. Schools of fish dart through coral below.",
-      "x": 2, "y": 13,
+      "x": 2,
+      "y": 13,
       "islandId": "verdant_isle",
       "type": "cove",
-      "resources": ["fish", "coral", "seaweed", "fresh_water"],
-      "connections": ["driftwood_beach"],
+      "resources": [
+        "fish",
+        "coral",
+        "seaweed",
+        "fresh_water"
+      ],
+      "connections": [
+        "driftwood_beach"
+      ],
       "npcs": [],
-      "enemies": []
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "fishing_cove_beach",
+          "name": "Crescent Beach",
+          "description": "Sandy beach where fishing nets dry in the sun beside beached wooden boats.",
+          "connections": [
+            "fishing_cove_shallows",
+            "fishing_cove_docks"
+          ]
+        },
+        {
+          "id": "fishing_cove_shallows",
+          "name": "Turquoise Shallows",
+          "description": "Clear turquoise waters shallow enough to see the sandy bottom and small fish.",
+          "connections": [
+            "fishing_cove_beach",
+            "fishing_cove_reef"
+          ]
+        },
+        {
+          "id": "fishing_cove_reef",
+          "name": "Coral Reef",
+          "description": "Colorful rock and coral formations just offshore creating a natural breakwater.",
+          "connections": [
+            "fishing_cove_shallows",
+            "fishing_cove_deep"
+          ]
+        },
+        {
+          "id": "fishing_cove_deep",
+          "name": "Deep Channel",
+          "description": "Deeper channel cutting through the cove where larger boats can navigate safely.",
+          "connections": [
+            "fishing_cove_reef",
+            "fishing_cove_docks"
+          ]
+        },
+        {
+          "id": "fishing_cove_docks",
+          "name": "Wooden Pier",
+          "description": "Simple wooden pier where small fishing boats are moored and nets are repaired.",
+          "connections": [
+            "fishing_cove_beach",
+            "fishing_cove_deep"
+          ]
+        }
+      ]
     },
     {
       "id": "coral_clearing",
       "name": "Coral Clearing",
       "description": "A natural clearing formed by massive brain corals. Crystal-clear tidal pools teem with colorful life.",
-      "x": 30, "y": 25,
+      "x": 30,
+      "y": 25,
       "islandId": "coral_atoll",
       "type": "clearing",
-      "resources": ["coral", "pearl", "sea_cucumber", "fresh_water"],
-      "connections": ["harbor", "lagoon_village", "reef_bridge_north"],
+      "resources": [
+        "coral",
+        "pearl",
+        "sea_cucumber",
+        "fresh_water"
+      ],
+      "connections": [
+        "harbor",
+        "lagoon_village",
+        "reef_bridge_north"
+      ],
       "npcs": [],
-      "enemies": []
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "coral_clearing_main",
+          "name": "Brain Coral Field",
+          "description": "Vast open area dominated by enormous brain corals the size of boulders.",
+          "connections": [
+            "coral_clearing_pools",
+            "coral_clearing_ridge"
+          ]
+        },
+        {
+          "id": "coral_clearing_pools",
+          "name": "Tidal Pool Complex",
+          "description": "Interconnected shallow pools brimming with starfish, anemones, and colorful fish.",
+          "connections": [
+            "coral_clearing_main",
+            "coral_clearing_ridge"
+          ]
+        },
+        {
+          "id": "coral_clearing_ridge",
+          "name": "Coral Ridge",
+          "description": "Elevated formations creating natural pathways worn smooth by countless visitors.",
+          "connections": [
+            "coral_clearing_main",
+            "coral_clearing_pools"
+          ]
+        }
+      ]
     },
     {
       "id": "lagoon_village",
       "name": "Lagoon Village",
       "description": "The Coral Tribe's underwater-adjacent settlement. Homes are half-submerged and decorated with living coral.",
-      "x": 24, "y": 20,
+      "x": 24,
+      "y": 20,
       "islandId": "coral_atoll",
       "type": "village",
-      "resources": ["fish", "pearl", "kelp"],
-      "connections": ["coral_clearing", "coral_throne", "deep_pools"],
-      "npcs": ["chief_maren", "coral_smith"],
-      "enemies": []
+      "resources": [
+        "fish",
+        "pearl",
+        "kelp"
+      ],
+      "connections": [
+        "coral_clearing",
+        "coral_throne",
+        "deep_pools"
+      ],
+      "npcs": [
+        "chief_maren",
+        "coral_smith"
+      ],
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "lagoon_village_central",
+          "name": "Floating Platform",
+          "description": "Central floating platform community with structures organically grown from living coral.",
+          "connections": [
+            "lagoon_village_residences",
+            "lagoon_village_gardens"
+          ]
+        },
+        {
+          "id": "lagoon_village_residences",
+          "name": "Coral Homes",
+          "description": "Dwellings carved from living coral, connected by graceful bridges spanning blue waters.",
+          "connections": [
+            "lagoon_village_central",
+            "lagoon_village_gardens"
+          ]
+        },
+        {
+          "id": "lagoon_village_gardens",
+          "name": "Underwater Gardens",
+          "description": "Submerged coral farms carefully tended by residents for food and medicine.",
+          "connections": [
+            "lagoon_village_central",
+            "lagoon_village_residences"
+          ]
+        }
+      ]
     },
     {
       "id": "coral_throne",
       "name": "Coral Throne",
       "description": "A magnificent throne carved from a single giant coral formation. Chief Maren holds court here.",
-      "x": 30, "y": 18,
+      "x": 30,
+      "y": 18,
       "islandId": "coral_atoll",
       "type": "landmark",
       "resources": [],
-      "connections": ["lagoon_village"],
-      "npcs": ["chief_maren"],
-      "enemies": []
+      "connections": [
+        "lagoon_village"
+      ],
+      "npcs": [
+        "chief_maren"
+      ],
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "coral_throne_base",
+          "name": "The Throne",
+          "description": "Massive coral formation naturally shaped into a regal seat fit for royalty.",
+          "connections": [
+            "coral_throne_chamber",
+            "coral_throne_approaches"
+          ]
+        },
+        {
+          "id": "coral_throne_chamber",
+          "name": "Inner Chamber",
+          "description": "Intimate alcove at the heart of the throne structure thrumming with ancient power.",
+          "connections": [
+            "coral_throne_base",
+            "coral_throne_approaches"
+          ]
+        },
+        {
+          "id": "coral_throne_approaches",
+          "name": "Audience Grounds",
+          "description": "Surrounding cleared areas worn smooth by those seeking audience with the throne.",
+          "connections": [
+            "coral_throne_base",
+            "coral_throne_chamber"
+          ]
+        }
+      ]
     },
     {
       "id": "deep_pools",
       "name": "Deep Pools",
       "description": "Dark bottomless pools where strange creatures lurk. The coral tribe avoids this place after dark.",
-      "x": 26, "y": 24,
+      "x": 26,
+      "y": 24,
       "islandId": "coral_atoll",
       "type": "danger_zone",
-      "resources": ["deep_pearl", "abyss_coral"],
-      "connections": ["lagoon_village"],
+      "resources": [
+        "deep_pearl",
+        "abyss_coral"
+      ],
+      "connections": [
+        "lagoon_village"
+      ],
       "npcs": [],
-      "enemies": ["abyssal_eel", "depth_lurker"]
+      "enemies": [
+        "abyssal_eel",
+        "depth_lurker"
+      ],
+      "subZones": [
+        {
+          "id": "deep_pools_edge",
+          "name": "Cliff Edge",
+          "description": "Dangerous cliff edge overlooking a seemingly bottomless chasm of absolute darkness.",
+          "connections": [
+            "deep_pools_abyss",
+            "deep_pools_vents"
+          ]
+        },
+        {
+          "id": "deep_pools_abyss",
+          "name": "The Abyss",
+          "description": "Vast sunless chasm where light dies and unseen things move in the darkness.",
+          "connections": [
+            "deep_pools_edge",
+            "deep_pools_vents"
+          ]
+        },
+        {
+          "id": "deep_pools_vents",
+          "name": "Thermal Vents",
+          "description": "Thermal vents glowing faintly orange against the pitch darkness of the depths.",
+          "connections": [
+            "deep_pools_edge",
+            "deep_pools_abyss"
+          ]
+        }
+      ]
     },
     {
       "id": "reef_bridge_north",
       "name": "Reef Bridge North",
       "description": "A natural coral bridge connecting the Coral Atoll to the Sun Reef. Treacherous when waves are high.",
-      "x": 28, "y": 30,
+      "x": 28,
+      "y": 30,
       "islandId": "sun_reef",
       "type": "bridge",
       "resources": [],
-      "connections": ["coral_clearing", "sun_platform"],
+      "connections": [
+        "coral_clearing",
+        "sun_platform"
+      ],
       "npcs": [],
-      "enemies": []
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "reef_bridge_north_entrance",
+          "name": "Bridge Entrance",
+          "description": "One end of the natural coral span stretching across dangerous waters.",
+          "connections": [
+            "reef_bridge_north_crossing",
+            "reef_bridge_north_midpoint"
+          ]
+        },
+        {
+          "id": "reef_bridge_north_crossing",
+          "name": "Coral Span",
+          "description": "Narrow walkway of natural coral traversing the bridge with waves crashing below.",
+          "connections": [
+            "reef_bridge_north_entrance",
+            "reef_bridge_north_midpoint"
+          ]
+        },
+        {
+          "id": "reef_bridge_north_midpoint",
+          "name": "Vista Platform",
+          "description": "Widened central platform offering panoramic views of the surrounding seascape.",
+          "connections": [
+            "reef_bridge_north_crossing"
+          ]
+        }
+      ]
     },
     {
       "id": "sun_platform",
       "name": "Sun Platform",
       "description": "A flat, sun-bleached coral platform perfect for resting. Warm sea breezes carry the scent of salt.",
-      "x": 22, "y": 36,
+      "x": 22,
+      "y": 36,
       "islandId": "sun_reef",
       "type": "rest_area",
-      "resources": ["dried_coral", "salt"],
-      "connections": ["reef_bridge_north", "ember_crossing"],
+      "resources": [
+        "dried_coral",
+        "salt"
+      ],
+      "connections": [
+        "reef_bridge_north",
+        "ember_crossing"
+      ],
       "npcs": [],
-      "enemies": []
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "sun_platform_main",
+          "name": "Sun-Warmed Platform",
+          "description": "Expansive flat platform heated by relentless sun, providing perfect resting place.",
+          "connections": [
+            "sun_platform_shade",
+            "sun_platform_pools"
+          ]
+        },
+        {
+          "id": "sun_platform_shade",
+          "name": "Stone Alcove",
+          "description": "Shadowed alcove carved into the coral providing cool respite from harsh rays.",
+          "connections": [
+            "sun_platform_main"
+          ]
+        },
+        {
+          "id": "sun_platform_pools",
+          "name": "Reflecting Pools",
+          "description": "Shallow pools of still water on the platform creating perfect mirror reflections.",
+          "connections": [
+            "sun_platform_main",
+            "sun_platform_shade"
+          ]
+        }
+      ]
     },
     {
       "id": "ember_crossing",
       "name": "Ember Crossing",
       "description": "Where the cool reef meets the hot volcanic rock. Steam rises where waves hit lava stone.",
-      "x": 36, "y": 25,
+      "x": 36,
+      "y": 25,
       "islandId": "ember_chain",
       "type": "transition",
-      "resources": ["obsidian_shard", "sulfur"],
-      "connections": ["sun_platform", "fire_tribe_camp", "lava_bridge"],
+      "resources": [
+        "obsidian_shard",
+        "sulfur"
+      ],
+      "connections": [
+        "sun_platform",
+        "fire_tribe_camp",
+        "lava_bridge"
+      ],
       "npcs": [],
-      "enemies": ["lava_crab"]
+      "enemies": [
+        "lava_crab"
+      ],
+      "subZones": [
+        {
+          "id": "ember_crossing_boundary",
+          "name": "The Borderline",
+          "description": "The visible line where cool sea reef gradually transforms into hot volcanic stone.",
+          "connections": [
+            "ember_crossing_reef_side",
+            "ember_crossing_volcanic_side"
+          ]
+        },
+        {
+          "id": "ember_crossing_reef_side",
+          "name": "Cool Reef Side",
+          "description": "Cool coral formations slowly fading to ash as volcanic heat increases.",
+          "connections": [
+            "ember_crossing_boundary"
+          ]
+        },
+        {
+          "id": "ember_crossing_volcanic_side",
+          "name": "Volcanic Side",
+          "description": "Hot blackened obsidian rocks steaming where hot stone meets cool ocean.",
+          "connections": [
+            "ember_crossing_boundary"
+          ]
+        }
+      ]
     },
     {
       "id": "fire_tribe_camp",
       "name": "Fire Tribe Camp",
       "description": "A fortified encampment built from volcanic rock. The Fire Tribe forges weapons in natural lava flows.",
-      "x": 40, "y": 19,
+      "x": 40,
+      "y": 19,
       "islandId": "ember_chain",
       "type": "village",
-      "resources": ["iron_ore", "obsidian_shard"],
-      "connections": ["ember_crossing", "forge_master"],
-      "npcs": ["warchief_kael", "forge_master_hilda"],
-      "enemies": []
+      "resources": [
+        "iron_ore",
+        "obsidian_shard"
+      ],
+      "connections": [
+        "ember_crossing",
+        "forge_master"
+      ],
+      "npcs": [
+        "warchief_kael",
+        "forge_master_hilda"
+      ],
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "fire_tribe_camp_entrance",
+          "name": "Obsidian Gate",
+          "description": "Imposing gate constructed from dark volcanic stone carved with warrior symbols.",
+          "connections": [
+            "fire_tribe_camp_plaza",
+            "fire_tribe_camp_barracks"
+          ]
+        },
+        {
+          "id": "fire_tribe_camp_plaza",
+          "name": "War Ground",
+          "description": "Ceremonial ground where warriors gather for training and ritual combat challenges.",
+          "connections": [
+            "fire_tribe_camp_entrance",
+            "fire_tribe_camp_forges"
+          ]
+        },
+        {
+          "id": "fire_tribe_camp_barracks",
+          "name": "Warrior Barracks",
+          "description": "Dwellings carved into volcanic rock where warriors rest between trials.",
+          "connections": [
+            "fire_tribe_camp_entrance",
+            "fire_tribe_camp_plaza"
+          ]
+        },
+        {
+          "id": "fire_tribe_camp_forges",
+          "name": "Forge District",
+          "description": "Area with roaring flames and master weapon-smiths crafting legendary arms.",
+          "connections": [
+            "fire_tribe_camp_plaza"
+          ]
+        }
+      ]
     },
     {
       "id": "forge_master",
       "name": "Hilda's Forge",
       "description": "A massive open-air forge using natural lava channels as furnaces. The heat is nearly unbearable.",
-      "x": 45, "y": 19,
+      "x": 45,
+      "y": 19,
       "islandId": "ember_chain",
       "type": "forge",
       "resources": [],
-      "connections": ["fire_tribe_camp"],
-      "npcs": ["forge_master_hilda"],
-      "enemies": []
+      "connections": [
+        "fire_tribe_camp"
+      ],
+      "npcs": [
+        "forge_master_hilda"
+      ],
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "forge_master_entrance",
+          "name": "Forge Gate",
+          "description": "Approach to the grand forge complex, already radiating intense heat.",
+          "connections": [
+            "forge_master_main",
+            "forge_master_anvils"
+          ]
+        },
+        {
+          "id": "forge_master_main",
+          "name": "Grand Forge",
+          "description": "Immense forge with roaring fires channeling molten lava through carefully carved courses.",
+          "connections": [
+            "forge_master_entrance",
+            "forge_master_storage"
+          ]
+        },
+        {
+          "id": "forge_master_anvils",
+          "name": "Anvil Workshops",
+          "description": "Rows of master crafting stations where legendary smiths hammer precious metals.",
+          "connections": [
+            "forge_master_entrance",
+            "forge_master_main"
+          ]
+        },
+        {
+          "id": "forge_master_storage",
+          "name": "Treasure Vault",
+          "description": "Vault containing caches of rare metals, finished weapons, and legendary artifacts.",
+          "connections": [
+            "forge_master_main",
+            "forge_master_anvils"
+          ]
+        }
+      ]
     },
     {
       "id": "lava_bridge",
       "name": "Lava Bridge",
       "description": "A narrow bridge of cooled lava connecting to the Obsidian Peaks. Glowing cracks hint at the molten river below.",
-      "x": 42, "y": 27,
+      "x": 42,
+      "y": 27,
       "islandId": "ember_chain",
       "type": "bridge",
       "resources": [],
-      "connections": ["ember_crossing", "sulfur_springs"],
+      "connections": [
+        "ember_crossing",
+        "sulfur_springs"
+      ],
       "npcs": [],
-      "enemies": ["fire_elemental"]
+      "enemies": [
+        "fire_elemental"
+      ],
+      "subZones": [
+        {
+          "id": "lava_bridge_start",
+          "name": "Bridge Start",
+          "description": "Beginning of the precarious crossing over flowing orange lava below.",
+          "connections": [
+            "lava_bridge_crossing",
+            "lava_bridge_midpoint"
+          ]
+        },
+        {
+          "id": "lava_bridge_crossing",
+          "name": "Spine of Ash",
+          "description": "Narrow spine of dark cooled lava suspended above still-flowing molten rivers.",
+          "connections": [
+            "lava_bridge_start",
+            "lava_bridge_midpoint"
+          ]
+        },
+        {
+          "id": "lava_bridge_midpoint",
+          "name": "Rest Point",
+          "description": "Slightly wider section of the bridge offering momentary respite from the crossing.",
+          "connections": [
+            "lava_bridge_crossing"
+          ]
+        }
+      ]
     },
     {
       "id": "sulfur_springs",
       "name": "Sulfur Springs",
       "description": "Bubbling hot springs with medicinal properties. The air is thick with sulfurous steam.",
-      "x": 42, "y": 42,
+      "x": 42,
+      "y": 42,
       "islandId": "obsidian_peaks",
       "type": "springs",
-      "resources": ["sulfur", "hot_spring_water", "medicinal_mud"],
-      "connections": ["lava_bridge", "obsidian_mine", "peak_trail"],
+      "resources": [
+        "sulfur",
+        "hot_spring_water",
+        "medicinal_mud"
+      ],
+      "connections": [
+        "lava_bridge",
+        "obsidian_mine",
+        "peak_trail"
+      ],
       "npcs": [],
-      "enemies": []
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "sulfur_springs_pools",
+          "name": "Thermal Pools",
+          "description": "Steaming mineral-rich pools with therapeutic waters rising from volcanic depths.",
+          "connections": [
+            "sulfur_springs_geysers",
+            "sulfur_springs_runoff"
+          ]
+        },
+        {
+          "id": "sulfur_springs_geysers",
+          "name": "Geyser Field",
+          "description": "Area of unpredictable explosive hot springs erupting with spectacular force.",
+          "connections": [
+            "sulfur_springs_pools",
+            "sulfur_springs_channels"
+          ]
+        },
+        {
+          "id": "sulfur_springs_runoff",
+          "name": "Mineral Streams",
+          "description": "Rivers of hot mineral water flowing downhill in glowing channels.",
+          "connections": [
+            "sulfur_springs_pools",
+            "sulfur_springs_geysers"
+          ]
+        },
+        {
+          "id": "sulfur_springs_channels",
+          "name": "Carven Waterways",
+          "description": "Channels carved and shaped over centuries directing water flow strategically.",
+          "connections": [
+            "sulfur_springs_runoff"
+          ]
+        }
+      ]
     },
     {
       "id": "obsidian_mine",
       "name": "Obsidian Mine",
       "description": "Deep tunnels carved into volcanic glass. Precious minerals glitter in torchlight.",
-      "x": 48, "y": 38,
+      "x": 48,
+      "y": 38,
       "islandId": "obsidian_peaks",
       "type": "mine",
-      "resources": ["obsidian", "raw_gem", "iron_ore"],
-      "connections": ["sulfur_springs"],
+      "resources": [
+        "obsidian",
+        "raw_gem",
+        "iron_ore"
+      ],
+      "connections": [
+        "sulfur_springs"
+      ],
       "npcs": [],
-      "enemies": ["rock_golem", "mine_spider"]
+      "enemies": [
+        "rock_golem",
+        "mine_spider"
+      ],
+      "subZones": [
+        {
+          "id": "obsidian_mine_entrance",
+          "name": "Mine Shaft",
+          "description": "Shaft opening into glittering black tunnels of pure volcanic obsidian.",
+          "connections": [
+            "obsidian_mine_main_tunnel",
+            "obsidian_mine_upper_cavern"
+          ]
+        },
+        {
+          "id": "obsidian_mine_main_tunnel",
+          "name": "Primary Vein",
+          "description": "Primary vein of obsidian cutting through the mountain like black blood.",
+          "connections": [
+            "obsidian_mine_entrance",
+            "obsidian_mine_lower_depths"
+          ]
+        },
+        {
+          "id": "obsidian_mine_upper_cavern",
+          "name": "Upper Chamber",
+          "description": "Branch chamber featuring massive formations of glossy black volcanic glass.",
+          "connections": [
+            "obsidian_mine_entrance",
+            "obsidian_mine_main_tunnel"
+          ]
+        },
+        {
+          "id": "obsidian_mine_lower_depths",
+          "name": "Deep Reserves",
+          "description": "Deep section where the rarest forms of black glass concentrate in purity.",
+          "connections": [
+            "obsidian_mine_main_tunnel"
+          ]
+        }
+      ]
     },
     {
       "id": "peak_trail",
       "name": "Peak Trail",
       "description": "A dangerous winding path up the main volcanic peak. The view expands with every step.",
-      "x": 54, "y": 38,
+      "x": 54,
+      "y": 38,
       "islandId": "obsidian_peaks",
       "type": "trail",
-      "resources": ["volcanic_rock", "eagle_feather"],
-      "connections": ["sulfur_springs", "volcano_summit"],
+      "resources": [
+        "volcanic_rock",
+        "eagle_feather"
+      ],
+      "connections": [
+        "sulfur_springs",
+        "volcano_summit"
+      ],
       "npcs": [],
-      "enemies": ["mountain_drake"]
+      "enemies": [
+        "mountain_drake"
+      ],
+      "subZones": [
+        {
+          "id": "peak_trail_base",
+          "name": "Mountain Base",
+          "description": "Rocky trailhead at the mountain foot where climbers gather supplies and courage.",
+          "connections": [
+            "peak_trail_lower_switchbacks",
+            "peak_trail_fog_zone"
+          ]
+        },
+        {
+          "id": "peak_trail_lower_switchbacks",
+          "name": "Lower Path",
+          "description": "Meandering trail with treacherous loose stone and sharp switchbacks ascending.",
+          "connections": [
+            "peak_trail_base",
+            "peak_trail_fog_zone"
+          ]
+        },
+        {
+          "id": "peak_trail_fog_zone",
+          "name": "Cloud Veil",
+          "description": "Section shrouded in thick clouds and mist where path becomes nearly invisible.",
+          "connections": [
+            "peak_trail_lower_switchbacks",
+            "peak_trail_upper_ridge"
+          ]
+        },
+        {
+          "id": "peak_trail_upper_ridge",
+          "name": "High Ridge",
+          "description": "Exposed ridge with treacherous drop-offs offering panoramic vistas below.",
+          "connections": [
+            "peak_trail_fog_zone"
+          ]
+        }
+      ]
     },
     {
       "id": "volcano_summit",
       "name": "Volcano Summit",
       "description": "The burning heart of Obsidian Peaks. A lava lake churns below, and the heat distorts the air.",
-      "x": 54, "y": 44,
+      "x": 54,
+      "y": 44,
       "islandId": "obsidian_peaks",
       "type": "landmark",
-      "resources": ["dragon_glass", "fire_crystal"],
-      "connections": ["peak_trail"],
+      "resources": [
+        "dragon_glass",
+        "fire_crystal"
+      ],
+      "connections": [
+        "peak_trail"
+      ],
       "npcs": [],
-      "enemies": ["volcanic_wyrm"]
+      "enemies": [
+        "volcanic_wyrm"
+      ],
+      "subZones": [
+        {
+          "id": "volcano_summit_crater_rim",
+          "name": "Crater Edge",
+          "description": "Edge of the massive volcanic crater where sulfurous winds constantly blow.",
+          "connections": [
+            "volcano_summit_lava_lake",
+            "volcano_summit_observation"
+          ]
+        },
+        {
+          "id": "volcano_summit_lava_lake",
+          "name": "Inferno Pool",
+          "description": "Churning lake of molten rock glowing brilliant orange and sparking with heat.",
+          "connections": [
+            "volcano_summit_crater_rim",
+            "volcano_summit_observation"
+          ]
+        },
+        {
+          "id": "volcano_summit_observation",
+          "name": "Vista Point",
+          "description": "Stable vantage point for safely observing the inferno and surrounding landscape.",
+          "connections": [
+            "volcano_summit_crater_rim",
+            "volcano_summit_lava_lake"
+          ]
+        }
+      ]
     },
     {
       "id": "ashen_shore",
       "name": "Ashen Shore",
       "description": "A black sand beach on the edge of Obsidian Peaks. Ash falls like snow from the smoking mountain.",
-      "x": 42, "y": 48,
+      "x": 42,
+      "y": 48,
       "islandId": "obsidian_peaks",
       "type": "beach",
-      "resources": ["volcanic_sand", "driftwood", "obsidian_shard"],
-      "connections": ["sulfur_springs", "peak_trail"],
+      "resources": [
+        "volcanic_sand",
+        "driftwood",
+        "obsidian_shard"
+      ],
+      "connections": [
+        "sulfur_springs",
+        "peak_trail"
+      ],
       "npcs": [],
-      "enemies": []
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "ashen_shore_beach",
+          "name": "Black Sand Beach",
+          "description": "Dark sandy beach constantly dusted with volcanic ash falling like snow.",
+          "connections": [
+            "ashen_shore_dunes",
+            "ashen_shore_tide"
+          ]
+        },
+        {
+          "id": "ashen_shore_dunes",
+          "name": "Ash Dunes",
+          "description": "Rolling blackened dunes moving and shifting like waves frozen in time.",
+          "connections": [
+            "ashen_shore_beach",
+            "ashen_shore_tide"
+          ]
+        },
+        {
+          "id": "ashen_shore_tide",
+          "name": "Ashen Waters",
+          "description": "Churning black waters where ash accumulates creating a strange dark foam.",
+          "connections": [
+            "ashen_shore_beach",
+            "ashen_shore_dunes"
+          ]
+        }
+      ]
     },
     {
       "id": "misty_grove",
       "name": "Misty Grove",
       "description": "An ancient grove where twisted trees form natural archways. Bioluminescent fungi light the way.",
-      "x": 12, "y": 43,
+      "x": 12,
+      "y": 43,
       "islandId": "mistwood_isle",
       "type": "forest",
-      "resources": ["glowshroom", "ancient_bark", "moonberry", "fresh_water"],
-      "connections": ["whispering_path", "witch_hollow"],
+      "resources": [
+        "glowshroom",
+        "ancient_bark",
+        "moonberry",
+        "fresh_water"
+      ],
+      "connections": [
+        "whispering_path",
+        "witch_hollow"
+      ],
       "npcs": [],
-      "enemies": ["shadow_wisp"]
+      "enemies": [
+        "shadow_wisp"
+      ],
+      "subZones": [
+        {
+          "id": "misty_grove_entrance",
+          "name": "Twisted Gateway",
+          "description": "Gateway beneath gnarled ancient trees reaching skyward with skeletal branches.",
+          "connections": [
+            "misty_grove_deep_woods",
+            "misty_grove_glowing_section"
+          ]
+        },
+        {
+          "id": "misty_grove_deep_woods",
+          "name": "Forest Heart",
+          "description": "Heart of twisted forest shrouded perpetually in fog thick as walls.",
+          "connections": [
+            "misty_grove_entrance",
+            "misty_grove_glowing_section"
+          ]
+        },
+        {
+          "id": "misty_grove_glowing_section",
+          "name": "Luminous Glade",
+          "description": "Dense cluster of bioluminescent fungi creating pools of soft blue and green light.",
+          "connections": [
+            "misty_grove_entrance",
+            "misty_grove_deep_woods"
+          ]
+        },
+        {
+          "id": "misty_grove_ancient_clearing",
+          "name": "Elder Circle",
+          "description": "Open space where the most ancient trees converge in a sacred convergence.",
+          "connections": [
+            "misty_grove_deep_woods"
+          ]
+        }
+      ]
     },
     {
       "id": "whispering_path",
       "name": "Whispering Path",
       "description": "A fog-covered trail where voices seem to emerge from the trees themselves. Don't follow them off the path.",
-      "x": 8, "y": 48,
+      "x": 8,
+      "y": 48,
       "islandId": "mistwood_isle",
       "type": "trail",
-      "resources": ["spirit_moss", "fog_lily"],
-      "connections": ["misty_grove", "spirit_village"],
+      "resources": [
+        "spirit_moss",
+        "fog_lily"
+      ],
+      "connections": [
+        "misty_grove",
+        "spirit_village"
+      ],
       "npcs": [],
-      "enemies": ["mist_wraith"]
+      "enemies": [
+        "mist_wraith"
+      ],
+      "subZones": [
+        {
+          "id": "whispering_path_entrance",
+          "name": "Misty Threshold",
+          "description": "Mysterious trailhead barely visible through thick fog and ethereal mist.",
+          "connections": [
+            "whispering_path_deep",
+            "whispering_path_voices"
+          ]
+        },
+        {
+          "id": "whispering_path_deep",
+          "name": "Deep Trail",
+          "description": "Winding path deeper into ethereal mist where echoing sounds follow travelers.",
+          "connections": [
+            "whispering_path_entrance",
+            "whispering_path_voices"
+          ]
+        },
+        {
+          "id": "whispering_path_voices",
+          "name": "Voice Chamber",
+          "description": "Area of particularly intense spectral whispers and ghostly murmuring.",
+          "connections": [
+            "whispering_path_entrance",
+            "whispering_path_deep"
+          ]
+        }
+      ]
     },
     {
       "id": "spirit_village",
       "name": "Spirit Village",
       "description": "The Spirit Tribe lives in harmony with the forest spirits. Their homes grow organically from living trees.",
-      "x": 4, "y": 44,
+      "x": 4,
+      "y": 44,
       "islandId": "mistwood_isle",
       "type": "village",
-      "resources": ["spirit_sap", "dreamleaf"],
-      "connections": ["whispering_path", "spirit_elder_tree", "moon_lake"],
-      "npcs": ["elder_yew", "spirit_weaver_linn"],
-      "enemies": []
+      "resources": [
+        "spirit_sap",
+        "dreamleaf"
+      ],
+      "connections": [
+        "whispering_path",
+        "spirit_elder_tree",
+        "moon_lake"
+      ],
+      "npcs": [
+        "elder_yew",
+        "spirit_weaver_linn"
+      ],
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "spirit_village_center",
+          "name": "Central Square",
+          "description": "Square with tree-homes spiraling upward, living wood shaped into dwellings.",
+          "connections": [
+            "spirit_village_homes",
+            "spirit_village_groves"
+          ]
+        },
+        {
+          "id": "spirit_village_homes",
+          "name": "Tree Dwellings",
+          "description": "Homes organically carved from living wood that still carries the pulse of life.",
+          "connections": [
+            "spirit_village_center",
+            "spirit_village_groves"
+          ]
+        },
+        {
+          "id": "spirit_village_groves",
+          "name": "Root Groves",
+          "description": "Sacred groves connecting all structures through vast root systems underground.",
+          "connections": [
+            "spirit_village_center",
+            "spirit_village_homes"
+          ]
+        }
+      ]
     },
     {
       "id": "spirit_elder_tree",
       "name": "The Elder Tree",
       "description": "A colossal tree at the heart of the Spirit Village. It is said to be thousands of years old and sentient.",
-      "x": 3, "y": 40,
+      "x": 3,
+      "y": 40,
       "islandId": "mistwood_isle",
       "type": "landmark",
       "resources": [],
-      "connections": ["spirit_village"],
-      "npcs": ["elder_yew"],
-      "enemies": []
+      "connections": [
+        "spirit_village"
+      ],
+      "npcs": [
+        "elder_yew"
+      ],
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "spirit_elder_tree_base",
+          "name": "Trunk Base",
+          "description": "Ground level at the base of a colossal trunk wider than any building.",
+          "connections": [
+            "spirit_elder_tree_crown",
+            "spirit_elder_tree_roots"
+          ]
+        },
+        {
+          "id": "spirit_elder_tree_crown",
+          "name": "Upper Canopy",
+          "description": "Ancient branches reaching impossibly high into the sky, dimmer with age.",
+          "connections": [
+            "spirit_elder_tree_base"
+          ]
+        },
+        {
+          "id": "spirit_elder_tree_roots",
+          "name": "Root Chambers",
+          "description": "Sprawling root system creating natural chambers and caves within the earth.",
+          "connections": [
+            "spirit_elder_tree_base"
+          ]
+        }
+      ]
     },
     {
       "id": "moon_lake",
       "name": "Moon Lake",
       "description": "A perfectly still lake that reflects the moon even during the day. Its waters have healing properties.",
-      "x": 4, "y": 49,
+      "x": 4,
+      "y": 49,
       "islandId": "mistwood_isle",
       "type": "lake",
-      "resources": ["moon_water", "silver_fish", "lotus"],
-      "connections": ["spirit_village", "tide_crossing"],
+      "resources": [
+        "moon_water",
+        "silver_fish",
+        "lotus"
+      ],
+      "connections": [
+        "spirit_village",
+        "tide_crossing"
+      ],
       "npcs": [],
-      "enemies": ["lake_serpent"]
+      "enemies": [
+        "lake_serpent"
+      ],
+      "subZones": [
+        {
+          "id": "moon_lake_shore",
+          "name": "Lunar Shore",
+          "description": "Serene shoreline reflecting starlight with perfect clarity and healing calm.",
+          "connections": [
+            "moon_lake_center",
+            "moon_lake_islands"
+          ]
+        },
+        {
+          "id": "moon_lake_center",
+          "name": "Lake Heart",
+          "description": "Pristine calm waters at the heart of the lake radiating peace and health.",
+          "connections": [
+            "moon_lake_shore",
+            "moon_lake_islands"
+          ]
+        },
+        {
+          "id": "moon_lake_islands",
+          "name": "Sacred Islands",
+          "description": "Small islands in the lake with natural hot springs channeling healing waters.",
+          "connections": [
+            "moon_lake_shore",
+            "moon_lake_center"
+          ]
+        }
+      ]
     },
     {
       "id": "witch_hollow",
       "name": "Witch Hollow",
       "description": "A dark depression in the forest where an exiled witch brews potions from exotic ingredients.",
-      "x": 7, "y": 39,
+      "x": 7,
+      "y": 39,
       "islandId": "mistwood_isle",
       "type": "dwelling",
       "resources": [],
-      "connections": ["misty_grove"],
-      "npcs": ["witch_morga"],
-      "enemies": []
+      "connections": [
+        "misty_grove"
+      ],
+      "npcs": [
+        "witch_morga"
+      ],
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "witch_hollow_cave",
+          "name": "Cave Mouth",
+          "description": "Dark cave entrance descending mysteriously into the earth's depths.",
+          "connections": [
+            "witch_hollow_workshop",
+            "witch_hollow_lair"
+          ]
+        },
+        {
+          "id": "witch_hollow_workshop",
+          "name": "Potion Chamber",
+          "description": "Cluttered chamber with bubbling cauldrons and shelves of mysterious ingredients.",
+          "connections": [
+            "witch_hollow_cave",
+            "witch_hollow_lair"
+          ]
+        },
+        {
+          "id": "witch_hollow_lair",
+          "name": "Inner Sanctum",
+          "description": "Deeper sanctum where darker rituals and forbidden magics are practiced.",
+          "connections": [
+            "witch_hollow_cave",
+            "witch_hollow_workshop"
+          ]
+        }
+      ]
     },
     {
       "id": "tide_crossing",
       "name": "Tide Crossing",
       "description": "A treacherous path of exposed seabed connecting multiple islands. Passable at low tide, with a sea channel leading to Mistwood Isle's Moon Lake.",
-      "x": 20, "y": 5,
+      "x": 20,
+      "y": 5,
       "islandId": "tide_flats",
       "type": "crossing",
-      "resources": ["shellfish", "sea_salt"],
-      "connections": ["harbor", "salt_field", "moon_lake"],
+      "resources": [
+        "shellfish",
+        "sea_salt"
+      ],
+      "connections": [
+        "harbor",
+        "salt_field",
+        "moon_lake"
+      ],
       "npcs": [],
-      "enemies": ["tide_crab"]
+      "enemies": [
+        "tide_crab"
+      ],
+      "subZones": [
+        {
+          "id": "tide_crossing_entrance",
+          "name": "Coastal Entry",
+          "description": "Beginning of the exposed temporary seafloor path across retreating tides.",
+          "connections": [
+            "tide_crossing_path",
+            "tide_crossing_shallows"
+          ]
+        },
+        {
+          "id": "tide_crossing_path",
+          "name": "Seabed Track",
+          "description": "Main route across the temporary dry seafloor carved by countless journeys.",
+          "connections": [
+            "tide_crossing_entrance",
+            "tide_crossing_shallows"
+          ]
+        },
+        {
+          "id": "tide_crossing_shallows",
+          "name": "Pool Zone",
+          "description": "Shallow areas with scattered tide pools teeming with trapped sea creatures.",
+          "connections": [
+            "tide_crossing_entrance",
+            "tide_crossing_path"
+          ]
+        }
+      ]
     },
     {
       "id": "salt_field",
       "name": "Salt Fields",
       "description": "Vast expanses of crystallized salt that crunch underfoot. Mirages dance on the horizon.",
-      "x": 24, "y": 3,
+      "x": 24,
+      "y": 3,
       "islandId": "tide_flats",
       "type": "field",
-      "resources": ["sea_salt", "brine_shrimp"],
-      "connections": ["tide_crossing", "traders_rest"],
+      "resources": [
+        "sea_salt",
+        "brine_shrimp"
+      ],
+      "connections": [
+        "tide_crossing",
+        "traders_rest"
+      ],
       "npcs": [],
-      "enemies": ["salt_scorpion"]
+      "enemies": [
+        "salt_scorpion"
+      ],
+      "subZones": [
+        {
+          "id": "salt_field_enter",
+          "name": "Salt Gateway",
+          "description": "Beginning of endless white crystallized salt formations extending to horizon.",
+          "connections": [
+            "salt_field_plain",
+            "salt_field_deposits"
+          ]
+        },
+        {
+          "id": "salt_field_plain",
+          "name": "Salt Plain",
+          "description": "Vast flat expanses of white crystallized salt crunching beneath every footstep.",
+          "connections": [
+            "salt_field_enter",
+            "salt_field_deposits"
+          ]
+        },
+        {
+          "id": "salt_field_deposits",
+          "name": "Salt Deposits",
+          "description": "Areas of particularly thick salt buildup forming natural white cliffs.",
+          "connections": [
+            "salt_field_enter",
+            "salt_field_plain"
+          ]
+        }
+      ]
     },
     {
       "id": "traders_rest",
       "name": "Trader's Rest",
       "description": "A waystation built on wooden platforms above the salt flats. Traveling merchants rest here between islands.",
-      "x": 28, "y": 6,
+      "x": 28,
+      "y": 6,
       "islandId": "tide_flats",
       "type": "waystation",
       "resources": [],
-      "connections": ["salt_field", "skyspire_approach"],
-      "npcs": ["wandering_merchant_ori"],
-      "enemies": []
+      "connections": [
+        "salt_field",
+        "skyspire_approach"
+      ],
+      "npcs": [
+        "wandering_merchant_ori"
+      ],
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "traders_rest_platform",
+          "name": "Trading Platform",
+          "description": "Main wooden platform with supply stalls and resting merchants everywhere.",
+          "connections": [
+            "traders_rest_shelter",
+            "traders_rest_stables"
+          ]
+        },
+        {
+          "id": "traders_rest_shelter",
+          "name": "Rest Shelter",
+          "description": "Covered areas providing warmth and shelter for weary travelers and traders.",
+          "connections": [
+            "traders_rest_platform",
+            "traders_rest_stables"
+          ]
+        },
+        {
+          "id": "traders_rest_stables",
+          "name": "Animal Stables",
+          "description": "Areas for caring for horses, camels, and other traveling beasts of burden.",
+          "connections": [
+            "traders_rest_platform",
+            "traders_rest_shelter"
+          ]
+        }
+      ]
     },
     {
       "id": "skyspire_approach",
       "name": "Skyspire Approach",
       "description": "The base of the impossibly tall Skyspire mountain. Ancient carved steps spiral upward into the clouds.",
-      "x": 46, "y": 9,
+      "x": 46,
+      "y": 9,
       "islandId": "skyspire_island",
       "type": "mountain_base",
-      "resources": ["mountain_herb", "climbing_vine"],
-      "connections": ["traders_rest", "cloud_stairway"],
+      "resources": [
+        "mountain_herb",
+        "climbing_vine"
+      ],
+      "connections": [
+        "traders_rest",
+        "cloud_stairway"
+      ],
       "npcs": [],
-      "enemies": ["wind_elemental"]
+      "enemies": [
+        "wind_elemental"
+      ],
+      "subZones": [
+        {
+          "id": "skyspire_approach_plains",
+          "name": "Plains Approach",
+          "description": "Grassy plains stretching toward the impossibly tall mountain on the horizon.",
+          "connections": [
+            "skyspire_approach_foothills",
+            "skyspire_approach_outpost"
+          ]
+        },
+        {
+          "id": "skyspire_approach_foothills",
+          "name": "Stone Foothills",
+          "description": "Rolling stone formations and ridges at the mountain's base.",
+          "connections": [
+            "skyspire_approach_plains",
+            "skyspire_approach_outpost"
+          ]
+        },
+        {
+          "id": "skyspire_approach_outpost",
+          "name": "Climber's Outpost",
+          "description": "Small settlement where climbers prepare for the dangerous ascent ahead.",
+          "connections": [
+            "skyspire_approach_plains",
+            "skyspire_approach_foothills"
+          ]
+        }
+      ]
     },
     {
       "id": "cloud_stairway",
       "name": "Cloud Stairway",
       "description": "Ancient stone steps disappearing into the clouds. The wind howls and the air grows thin.",
-      "x": 52, "y": 5,
+      "x": 52,
+      "y": 5,
       "islandId": "skyspire_island",
       "type": "stairway",
-      "resources": ["cloud_condensation"],
-      "connections": ["skyspire_approach", "sky_temple"],
+      "resources": [
+        "cloud_condensation"
+      ],
+      "connections": [
+        "skyspire_approach",
+        "sky_temple"
+      ],
       "npcs": [],
-      "enemies": ["sky_hawk", "wind_elemental"]
+      "enemies": [
+        "sky_hawk",
+        "wind_elemental"
+      ],
+      "subZones": [
+        {
+          "id": "cloud_stairway_start",
+          "name": "Ancient Steps",
+          "description": "Beginning of ancient stone steps ascending into mist and clouds above.",
+          "connections": [
+            "cloud_stairway_lower_section",
+            "cloud_stairway_upper_reaches"
+          ]
+        },
+        {
+          "id": "cloud_stairway_lower_section",
+          "name": "Lower Ascent",
+          "description": "Oldest steps carefully carved by ancient hands, weathered but steadfast.",
+          "connections": [
+            "cloud_stairway_start",
+            "cloud_stairway_middle"
+          ]
+        },
+        {
+          "id": "cloud_stairway_middle",
+          "name": "Cloud Veil",
+          "description": "Misty middle section where the path becomes nearly invisible in thick clouds.",
+          "connections": [
+            "cloud_stairway_lower_section",
+            "cloud_stairway_upper_reaches"
+          ]
+        },
+        {
+          "id": "cloud_stairway_upper_reaches",
+          "name": "Skyward Stairs",
+          "description": "Final stairs emerging above the clouds into brilliant sunlight and clear sky.",
+          "connections": [
+            "cloud_stairway_middle"
+          ]
+        }
+      ]
     },
     {
       "id": "sky_temple",
       "name": "Sky Temple",
       "description": "An ancient temple at the peak of Skyspire. The clouds part here, revealing a breathtaking view of all the Shattered Isles.",
-      "x": 58, "y": 1,
+      "x": 58,
+      "y": 1,
       "islandId": "skyspire_island",
       "type": "temple",
-      "resources": ["sky_crystal", "ancient_scroll"],
-      "connections": ["cloud_stairway"],
-      "npcs": ["temple_keeper_aeon"],
-      "enemies": []
+      "resources": [
+        "sky_crystal",
+        "ancient_scroll"
+      ],
+      "connections": [
+        "cloud_stairway"
+      ],
+      "npcs": [
+        "temple_keeper_aeon"
+      ],
+      "enemies": [],
+      "subZones": [
+        {
+          "id": "sky_temple_entrance",
+          "name": "Sacred Gate",
+          "description": "Grand stone entrance carved intricately with celestial symbols and star maps.",
+          "connections": [
+            "sky_temple_main_hall",
+            "sky_temple_observatory"
+          ]
+        },
+        {
+          "id": "sky_temple_main_hall",
+          "name": "Central Hall",
+          "description": "Vast central chamber with cosmic murals depicting celestial mechanics on walls.",
+          "connections": [
+            "sky_temple_entrance",
+            "sky_temple_observatory"
+          ]
+        },
+        {
+          "id": "sky_temple_observatory",
+          "name": "Observatory Tower",
+          "description": "Tower chamber with skylights and intricate star-maps etched into stone.",
+          "connections": [
+            "sky_temple_entrance",
+            "sky_temple_main_hall"
+          ]
+        }
+      ]
     }
   ],
   "npcs": {
@@ -601,126 +2153,185 @@
       "hp": 30,
       "damage": 8,
       "description": "A dog-sized spider with venomous fangs and camouflaged hide.",
-      "loot": ["spider_silk", "venom_gland"]
+      "loot": [
+        "spider_silk",
+        "venom_gland"
+      ]
     },
     "stone_guardian": {
       "name": "Stone Guardian",
       "hp": 80,
       "damage": 15,
       "description": "An animated stone statue from the ancient ruins. Slow but devastating.",
-      "loot": ["ancient_stone", "glyph_fragment", "guardian_core"]
+      "loot": [
+        "ancient_stone",
+        "glyph_fragment",
+        "guardian_core"
+      ]
     },
     "cave_bat": {
       "name": "Cave Bat",
       "hp": 15,
       "damage": 5,
       "description": "A large bat with glowing eyes that hunts in the dark.",
-      "loot": ["bat_wing", "echo_crystal"]
+      "loot": [
+        "bat_wing",
+        "echo_crystal"
+      ]
     },
     "abyssal_eel": {
       "name": "Abyssal Eel",
       "hp": 50,
       "damage": 12,
       "description": "A monstrous electric eel from the deep pools. Shocks anything that comes near.",
-      "loot": ["shock_fin", "deep_pearl"]
+      "loot": [
+        "shock_fin",
+        "deep_pearl"
+      ]
     },
     "depth_lurker": {
       "name": "Depth Lurker",
       "hp": 100,
       "damage": 20,
       "description": "A tentacled horror from the ocean depths. Few survive an encounter.",
-      "loot": ["lurker_tentacle", "abyss_coral", "dark_pearl"]
+      "loot": [
+        "lurker_tentacle",
+        "abyss_coral",
+        "dark_pearl"
+      ]
     },
     "lava_crab": {
       "name": "Lava Crab",
       "hp": 40,
       "damage": 10,
       "description": "A crab with a shell of cooled lava. Its pincers glow red-hot.",
-      "loot": ["lava_shell", "obsidian_shard"]
+      "loot": [
+        "lava_shell",
+        "obsidian_shard"
+      ]
     },
     "fire_elemental": {
       "name": "Fire Elemental",
       "hp": 70,
       "damage": 18,
       "description": "A living flame that patrols the lava bridges. Immune to fire.",
-      "loot": ["fire_crystal", "ember_core"]
+      "loot": [
+        "fire_crystal",
+        "ember_core"
+      ]
     },
     "rock_golem": {
       "name": "Rock Golem",
       "hp": 90,
       "damage": 14,
       "description": "A massive golem formed from volcanic rock. Guards the mine tunnels.",
-      "loot": ["iron_ore", "raw_gem", "golem_heart"]
+      "loot": [
+        "iron_ore",
+        "raw_gem",
+        "golem_heart"
+      ]
     },
     "mine_spider": {
       "name": "Mine Spider",
       "hp": 25,
       "damage": 7,
       "description": "A crystalline spider that spins webs of mineral thread.",
-      "loot": ["crystal_thread", "raw_gem"]
+      "loot": [
+        "crystal_thread",
+        "raw_gem"
+      ]
     },
     "mountain_drake": {
       "name": "Mountain Drake",
       "hp": 120,
       "damage": 22,
       "description": "A young dragon that nests on the volcanic peaks. Breathes superheated air.",
-      "loot": ["drake_scale", "dragon_glass"]
+      "loot": [
+        "drake_scale",
+        "dragon_glass"
+      ]
     },
     "volcanic_wyrm": {
       "name": "Volcanic Wyrm",
       "hp": 200,
       "damage": 30,
       "description": "The apex predator of Obsidian Peaks. A colossal serpent of magma and stone.",
-      "loot": ["wyrm_fang", "fire_crystal", "dragon_glass", "volcanic_heart"]
+      "loot": [
+        "wyrm_fang",
+        "fire_crystal",
+        "dragon_glass",
+        "volcanic_heart"
+      ]
     },
     "shadow_wisp": {
       "name": "Shadow Wisp",
       "hp": 20,
       "damage": 8,
       "description": "A flickering ball of dark energy that drains life force.",
-      "loot": ["shadow_essence", "glowshroom"]
+      "loot": [
+        "shadow_essence",
+        "glowshroom"
+      ]
     },
     "mist_wraith": {
       "name": "Mist Wraith",
       "hp": 60,
       "damage": 15,
       "description": "A ghostly figure that emerges from the fog. Its touch chills to the bone.",
-      "loot": ["wraith_cloth", "spirit_moss"]
+      "loot": [
+        "wraith_cloth",
+        "spirit_moss"
+      ]
     },
     "lake_serpent": {
       "name": "Lake Serpent",
       "hp": 80,
       "damage": 16,
       "description": "A long sinuous creature that lurks in Moon Lake's depths.",
-      "loot": ["serpent_scale", "moon_water"]
+      "loot": [
+        "serpent_scale",
+        "moon_water"
+      ]
     },
     "tide_crab": {
       "name": "Tide Crab",
       "hp": 25,
       "damage": 6,
       "description": "A large crab that ambushes travelers on the tide crossings.",
-      "loot": ["crab_shell", "shellfish"]
+      "loot": [
+        "crab_shell",
+        "shellfish"
+      ]
     },
     "salt_scorpion": {
       "name": "Salt Scorpion",
       "hp": 35,
       "damage": 10,
       "description": "A white scorpion perfectly camouflaged against the salt flats.",
-      "loot": ["scorpion_venom", "sea_salt"]
+      "loot": [
+        "scorpion_venom",
+        "sea_salt"
+      ]
     },
     "wind_elemental": {
       "name": "Wind Elemental",
       "hp": 50,
       "damage": 12,
       "description": "A swirling vortex of air that guards the Skyspire approach.",
-      "loot": ["wind_essence", "cloud_condensation"]
+      "loot": [
+        "wind_essence",
+        "cloud_condensation"
+      ]
     },
     "sky_hawk": {
       "name": "Sky Hawk",
       "hp": 40,
       "damage": 14,
       "description": "A massive raptor with razor talons that dives from above.",
-      "loot": ["eagle_feather", "hawk_talon"]
+      "loot": [
+        "eagle_feather",
+        "hawk_talon"
+      ]
     }
   }
 }

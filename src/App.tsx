@@ -29,6 +29,9 @@ interface Character {
   gold: number;
   profileMarkdown: string;
   imageUrl?: string;
+  battles?: number;
+  wins?: number;
+  losses?: number;
 }
 
 interface Message {
@@ -58,6 +61,7 @@ interface WorldLocation {
 
 interface ExplorationState {
   locationId: string;
+  subZoneId: string | null;
   x: number;
   y: number;
   hunger: number;
@@ -254,10 +258,19 @@ interface WorldNpc {
   followTargetId?: string | null;
 }
 
+interface BattleZone {
+  id: string;
+  name: string;
+  description: string;
+  connections: string[];
+}
+
 interface BattleMapState {
   discoveredLocations: string[];
   players: WorldPlayer[];
   npcs: WorldNpc[];
+  zones?: BattleZone[];
+  combatantZones?: Record<string, string>;
 }
 
 interface ArenaPreparationState {
@@ -322,44 +335,79 @@ const getLocationHopDistance = (worldData: any, startLocationId?: string | null,
   return Number.POSITIVE_INFINITY;
 };
 
-const buildBattleMapContext = (worldData: any, mapState?: BattleMapState, roomPlayers?: Record<string, any>) => {
-  if (!worldData || !mapState || mapState.players.length === 0) return '';
-
-  let context = 'BATTLE MAP STATE:\n';
-  for (const player of mapState.players) {
-    const location = getWorldLocationById(worldData, player.locationId);
-    const playerName = roomPlayers?.[player.id]?.character?.name || player.name;
-    context += `- ${playerName} is at grid (${player.x.toFixed(1)}, ${player.y.toFixed(1)}) near ${location?.name || player.locationId}. Connected routes: ${(location?.connections || []).join(', ') || 'none'}.\n`;
-  }
-
-  if (mapState.players.length >= 2) {
-    for (let index = 0; index < mapState.players.length; index += 1) {
-      for (let innerIndex = index + 1; innerIndex < mapState.players.length; innerIndex += 1) {
-        const left = mapState.players[index];
-        const right = mapState.players[innerIndex];
-        const distance = getLocationHopDistance(worldData, left.locationId, right.locationId);
-        const leftName = roomPlayers?.[left.id]?.character?.name || left.name;
-        const rightName = roomPlayers?.[right.id]?.character?.name || right.name;
-        const distanceLabel = distance === 0
-          ? 'sharing the same location'
-          : distance === 1
-            ? 'one move apart'
-            : Number.isFinite(distance)
-              ? `${distance} moves apart`
-              : 'positionally disconnected';
-        context += `- ${leftName} and ${rightName} are ${distanceLabel}.\n`;
+const getZoneHopDistance = (zones: BattleZone[], fromId: string, toId: string): number => {
+  if (fromId === toId) return 0;
+  const visited = new Set<string>();
+  const queue: [string, number][] = [[fromId, 0]];
+  visited.add(fromId);
+  while (queue.length > 0) {
+    const [current, dist] = queue.shift()!;
+    const zone = zones.find(z => z.id === current);
+    if (!zone) continue;
+    for (const neighbor of zone.connections) {
+      if (neighbor === toId) return dist + 1;
+      if (!visited.has(neighbor)) {
+        visited.add(neighbor);
+        queue.push([neighbor, dist + 1]);
       }
     }
   }
+  return Infinity;
+};
 
-  context += '\nARENA MOVEMENT RULES:\n';
-  context += '- Current positions are authoritative at turn start. Resolve any new movement this turn by returning updated battlePositions in the tool call.\n';
-  context += '- Water between islands is traversable. Swimming or sailing can move fighters to fractional x/y coordinates between named locations.\n';
-  context += '- If fighters share a location, melee, grapples, and close-range attacks can connect normally.\n';
-  context += '- If fighters are one move apart, melee must spend the turn closing distance or chasing before it can land. Ranged pressure and spells may still connect with positioning tradeoffs.\n';
-  context += '- If fighters are two or more moves apart, melee cannot land this turn unless the action is entirely about pursuit. Favor ranged attacks, traps, mobility, scouting, or escape.\n';
-  context += '- Use chase, flee, pursuit, and terrain-aware narration naturally in the resolution.\n';
-  context += '- When movement happens, update exact x/y positions so the minimap reflects mid-route travel accurately.\n';
+const buildBattleMapContext = (worldData: any, mapState?: BattleMapState, roomPlayers?: Record<string, any>) => {
+  if (!worldData || !mapState || mapState.players.length === 0) return '';
+
+  let context = '';
+
+  // Zone-based combat context (preferred)
+  if (mapState.zones && mapState.zones.length > 0 && mapState.combatantZones) {
+    context += 'BATTLE ZONES:\n';
+    for (const zone of mapState.zones) {
+      const occupants = Object.entries(mapState.combatantZones)
+        .filter(([, zoneId]) => zoneId === zone.id)
+        .map(([name]) => name);
+      context += `- **${zone.name}** [${zone.id}]: ${zone.description}`;
+      if (occupants.length > 0) context += ` — Occupied by: ${occupants.join(', ')}`;
+      context += `. Connected to: ${zone.connections.join(', ')}.\n`;
+    }
+
+    context += '\nCOMBATANT POSITIONS:\n';
+    for (const [name, zoneId] of Object.entries(mapState.combatantZones)) {
+      const zone = mapState.zones.find(z => z.id === zoneId);
+      context += `- ${name} is in ${zone?.name || zoneId}\n`;
+    }
+
+    // Zone distances between combatants
+    const names = Object.keys(mapState.combatantZones);
+    if (names.length >= 2) {
+      context += '\nDISTANCES:\n';
+      for (let i = 0; i < names.length; i++) {
+        for (let j = i + 1; j < names.length; j++) {
+          const z1 = mapState.combatantZones[names[i]];
+          const z2 = mapState.combatantZones[names[j]];
+          if (z1 === z2) {
+            context += `- ${names[i]} and ${names[j]} are in the SAME ZONE (melee range)\n`;
+          } else {
+            // BFS for zone distance
+            const dist = getZoneHopDistance(mapState.zones, z1, z2);
+            const label = dist === 1 ? '1 zone apart (adjacent)' : dist === Infinity ? 'disconnected' : `${dist} zones apart`;
+            context += `- ${names[i]} and ${names[j]} are ${label}\n`;
+          }
+        }
+      }
+    }
+    return context;
+  }
+
+  // Fallback: legacy grid-based context
+  context += 'BATTLE MAP STATE:\n';
+  context += 'No battle zones have been set up yet. Call setup_battle_zones on this first turn to create the spatial arena layout.\n';
+  for (const player of mapState.players) {
+    const location = getWorldLocationById(worldData, player.locationId);
+    const playerName = roomPlayers?.[player.id]?.character?.name || player.name;
+    context += `- ${playerName} starts near ${location?.name || player.locationId}.\n`;
+  }
 
   return context;
 };
@@ -703,6 +751,7 @@ export default function App() {
   const [worldData, setWorldData] = useState<any>(null);
   const [explorationState, setExplorationState] = useState<ExplorationState>({
     locationId: '',
+    subZoneId: null,
     x: 0,
     y: 0,
     hunger: 100,
@@ -721,6 +770,8 @@ export default function App() {
   const [worldNpcs, setWorldNpcs] = useState<WorldNpc[]>([]);
   const [explorationLockStatus, setExplorationLockStatus] = useState<{id: string; name: string; lockedIn: boolean}[]>([]);
   const [isExplorationLockedIn, setIsExplorationLockedIn] = useState(false);
+  const [explorationSummary, setExplorationSummary] = useState('');
+  const [isCompacting, setIsCompacting] = useState(false);
   const [showGoalsModal, setShowGoalsModal] = useState(false);
   const [showFullMap, setShowFullMap] = useState(false);
   const [mapZoom, setMapZoom] = useState(1);
@@ -731,6 +782,7 @@ export default function App() {
   const [showCharImage, setShowCharImage] = useState(false);
   const [isGeneratingCharImage, setIsGeneratingCharImage] = useState(false);
   const [explorationCombatReturn, setExplorationCombatReturn] = useState(false);
+  const [combatEnemyLoot, setCombatEnemyLoot] = useState<string[]>([]);
   const explorationEndRef = useRef<HTMLDivElement>(null);
   const explorationInputRef = useRef<HTMLTextAreaElement>(null);
   const worldDataRef = useRef<any>(null);
@@ -751,6 +803,7 @@ export default function App() {
       return {
         ...prev,
         locationId,
+        subZoneId: null,
         x,
         y,
         discoveredLocations: newDiscovered,
@@ -758,12 +811,50 @@ export default function App() {
     });
   }, []);
 
+  const compactConversation = useCallback(async () => {
+    // Estimate tokens: ~4 chars per token
+    const logText = explorationLog.map(m => m.text).join('\n');
+    const estimatedTokens = Math.ceil(logText.length / 4);
+    const COMPACT_THRESHOLD = 6000; // ~24K chars
+    if (estimatedTokens < COMPACT_THRESHOLD || isCompacting) return;
+
+    setIsCompacting(true);
+    try {
+      const aiClient = getAIClient();
+      // Take the oldest 2/3 of messages to summarize
+      const splitIdx = Math.floor(explorationLog.length * 2 / 3);
+      const oldMessages = explorationLog.slice(0, splitIdx);
+      const oldText = oldMessages.map(m => `[${m.role}] ${m.text}`).join('\n');
+
+      const existingSummary = explorationSummary ? `PREVIOUS SUMMARY:\n${explorationSummary}\n\n` : '';
+      const prompt = `${existingSummary}Summarize this RPG exploration conversation history into a concise narrative summary. Preserve: key events, decisions, combat outcomes, NPC interactions, items found/used, quest progress, and important dialog. Keep it under 500 words.\n\nCONVERSATION:\n${oldText}`;
+
+      const response = await aiClient.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: prompt,
+        config: { temperature: 0.3 },
+      });
+
+      const summary = response.text?.trim();
+      if (summary) {
+        setExplorationSummary(summary);
+        setExplorationLog(prev => prev.slice(splitIdx));
+      }
+    } catch (e) {
+      console.error('Compaction failed:', e);
+    } finally {
+      setIsCompacting(false);
+    }
+  }, [explorationLog, explorationSummary, isCompacting, getAIClient]);
+
   const syncBattleMapState = useCallback((nextState?: Partial<BattleMapState> | null) => {
-    setBattleMapState({
-      discoveredLocations: nextState?.discoveredLocations ?? [],
-      players: nextState?.players ?? [],
-      npcs: nextState?.npcs ?? [],
-    });
+    setBattleMapState(prev => ({
+      discoveredLocations: nextState?.discoveredLocations ?? prev.discoveredLocations ?? [],
+      players: nextState?.players ?? prev.players ?? [],
+      npcs: nextState?.npcs ?? prev.npcs ?? [],
+      zones: nextState?.zones ?? prev.zones,
+      combatantZones: nextState?.combatantZones ?? prev.combatantZones,
+    }));
   }, []);
 
   useEffect(() => {
@@ -797,6 +888,7 @@ export default function App() {
   const [isLockedIn, setIsLockedIn] = useState(false);
   const [roomTypingIds, setRoomTypingIds] = useState<string[]>([]);
   const [localRoomTypingIds, setLocalRoomTypingIds] = useState<string[]>([]);
+  const [botRewriteAttempt, setBotRewriteAttempt] = useState(0);
   const typingStopTimeoutsRef = useRef<Record<string, number>>({});
   const battleEndRef = useRef<HTMLDivElement>(null);
   const charInputRef = useRef<HTMLTextAreaElement>(null);
@@ -812,6 +904,7 @@ export default function App() {
   const lastSyncedCharRef = useRef<string>('');
   const [queuePlayers, setQueuePlayers] = useState<any[]>([]);
   const [isBotMatch, setIsBotMatch] = useState(false);
+  const [battleOutcome, setBattleOutcome] = useState<'win' | 'loss' | null>(null);
   const [isGeneratingBattleImage, setIsGeneratingBattleImage] = useState(false);
   const [hasVisualizedThisTurn, setHasVisualizedThisTurn] = useState(false);
   const [turnTimerRemaining, setTurnTimerRemaining] = useState<number | null>(null);
@@ -1066,14 +1159,22 @@ export default function App() {
 
     let cancelled = false;
     let rewriteSubmitted = false;
-    const previewFallbackTimeout = window.setTimeout(() => {
+
+    const finishBotRewrite = (profileMarkdown: string) => {
       if (cancelled || rewriteSubmitted) return;
       rewriteSubmitted = true;
+      window.clearTimeout(previewFallbackTimeout);
       socket.emit('characterCreated', {
         playerId: botId,
         ...botPlayer.character,
-        profileMarkdown: botPlayer.character.profileMarkdown,
+        profileMarkdown,
       });
+      setLocalRoomTypingIds(prev => prev.filter(id => id !== botId));
+      setBotRewriteAttempt(0);
+    };
+
+    const previewFallbackTimeout = window.setTimeout(() => {
+      finishBotRewrite(botPlayer.character.profileMarkdown);
     }, 2500);
 
     const rewriteBotProfile = async () => {
@@ -1095,39 +1196,25 @@ export default function App() {
           });
 
           const rewrittenProfile = response.text?.trim();
-          if (!cancelled && !rewriteSubmitted && rewrittenProfile) {
-            rewriteSubmitted = true;
-            window.clearTimeout(previewFallbackTimeout);
-            socket.emit('characterCreated', {
-              playerId: botId,
-              ...botPlayer.character,
-              profileMarkdown: rewrittenProfile,
-            });
+          if (rewrittenProfile) {
+            finishBotRewrite(rewrittenProfile);
           }
           return;
         } catch (error: any) {
           if (cancelled || rewriteSubmitted) return;
           const isRetryable = error?.status === 503 || error?.status === 429 || error?.message?.includes('503') || error?.message?.includes('429');
           if (isRetryable && attempt < maxRetries) {
+            setBotRewriteAttempt(attempt + 1);
             await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 2000));
             continue;
           }
-          // Only log if we haven't already submitted via fallback
           if (!rewriteSubmitted) {
             console.error('Failed to rewrite bot preparation profile', error);
           }
         }
       }
 
-      if (!cancelled && !rewriteSubmitted) {
-        rewriteSubmitted = true;
-        window.clearTimeout(previewFallbackTimeout);
-        socket.emit('characterCreated', {
-          playerId: botId,
-          ...botPlayer.character,
-          profileMarkdown: botPlayer.character.profileMarkdown,
-        });
-      }
+      finishBotRewrite(botPlayer.character.profileMarkdown);
     };
 
     rewriteBotProfile();
@@ -1136,6 +1223,7 @@ export default function App() {
       cancelled = true;
       window.clearTimeout(previewFallbackTimeout);
       setLocalRoomTypingIds(prev => prev.filter(id => id !== botId));
+      setBotRewriteAttempt(0);
     };
   }, [arenaPreparation?.isBotMatch, getAIClient, roomId]);
 
@@ -1297,6 +1385,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       setRoomTypingIds([]);
       setLocalRoomTypingIds([]);
       setIsBotMatch(data.isBotMatch);
+      setBattleOutcome(null);
       setIsExplorationProcessing(false);
       setExplorationLockStatus([]);
       setExplorationRetryAttempt(0);
@@ -1402,9 +1491,28 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         }
       };
 
+      const setupBattleZones = {
+        name: "setup_battle_zones",
+        description: "Generate the battlefield zones for this combat encounter. Call this FIRST on Turn 1 before writing the battle log. Creates the spatial layout of the arena.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            zones: {
+              type: "STRING",
+              description: "JSON string of zone definitions. Format: [{\"id\": \"rocky_outcrop\", \"name\": \"Rocky Outcrop\", \"description\": \"A cluster of boulders providing solid cover\", \"connections\": [\"open_field\", \"tower_base\"]}, ...]. Each zone needs id, name, description, and connections (array of connected zone ids)."
+            },
+            combatantZones: {
+              type: "STRING",
+              description: "JSON string mapping each combatant name to their starting zone id. Format: {\"CharName1\": \"zone_id\", \"CharName2\": \"zone_id\"}"
+            }
+          },
+          required: ["zones", "combatantZones"]
+        }
+      };
+
       const submitBattleResult = {
         name: "submit_battle_result",
-        description: "Submit the updated character states after resolving the turn. Call this AFTER writing the battle log narrative. Include battlePositions whenever movement, pursuit, swimming, sailing, or fleeing changes exact map coordinates.",
+        description: "Submit the updated character states after resolving the turn. Call this AFTER writing the battle log narrative. Always include combatantZones to track where each combatant ends the turn.",
         parameters: {
           type: "OBJECT",
           properties: {
@@ -1412,12 +1520,20 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
               type: "STRING",
               description: "JSON string of character states. Format: {\"CharName1\": {\"hp\": number, \"mana\": number, \"profileMarkdown\": \"optional updated markdown\"}, \"CharName2\": {\"hp\": number, \"mana\": number}}"
             },
+            combatantZones: {
+              type: "STRING",
+              description: "JSON string mapping each combatant name to their current zone id after this turn. Format: {\"CharName1\": \"zone_id\", \"CharName2\": \"zone_id\"}"
+            },
+            zoneUpdates: {
+              type: "STRING",
+              description: "Optional JSON string of zone changes (destroyed cover, new hazards, etc). Format: [{\"id\": \"zone_id\", \"description\": \"Updated description after explosion destroyed the wall\"}]"
+            },
             battlePositions: {
               type: "STRING",
-              description: "Optional JSON string of per-character map positions. Format: {\"CharName1\": {\"x\": number, \"y\": number, \"locationId\": \"nearest_or_tactical_location_id\"}, \"CharName2\": {\"x\": number, \"y\": number, \"locationId\": \"...\"}}. Update this every turn when movement changes positions, including water travel between islands."
+              description: "Optional JSON string of per-character map positions for minimap. Format: {\"CharName1\": {\"x\": number, \"y\": number, \"locationId\": \"nearest_or_tactical_location_id\"}, \"CharName2\": {\"x\": number, \"y\": number, \"locationId\": \"...\"}}."
             }
           },
-          required: ["characterStates"]
+          required: ["characterStates", "combatantZones"]
         }
       };
 
@@ -1448,7 +1564,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
                   includeThoughts: true,
                   thinkingBudget: 8192
                 },
-                tools: [{ functionDeclarations: [readBattleHistory as any, submitBattleResult as any] }]
+                tools: [{ functionDeclarations: [readBattleHistory as any, setupBattleZones as any, submitBattleResult as any] }]
               },
             });
 
@@ -1523,6 +1639,38 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
                   }]
               });
               // Loop again to let the model continue
+              } else if (funcName === 'setup_battle_zones') {
+                // AI is setting up the battle arena zones (Turn 1)
+                let zones: BattleZone[] = [];
+                let combatantZones: Record<string, string> = {};
+                try {
+                  zones = typeof args.zones === 'string' ? JSON.parse(args.zones) : args.zones;
+                } catch (e) {
+                  console.error("Failed to parse battle zones", e);
+                }
+                try {
+                  combatantZones = typeof args.combatantZones === 'string' ? JSON.parse(args.combatantZones) : args.combatantZones;
+                } catch (e) {
+                  console.error("Failed to parse combatant zones", e);
+                }
+
+                // Store zones in mapState and emit to server
+                if (zones.length > 0) {
+                  socket.emit('battleZonesSetup', { zones, combatantZones });
+                  syncBattleMapState({ zones, combatantZones });
+                }
+
+                // Respond to the tool call so the model can continue with the battle log
+                contents.push({ role: 'model', parts: modelParts });
+                contents.push({
+                  role: 'user',
+                  parts: [{
+                    functionResponse: {
+                      name: "setup_battle_zones",
+                      response: { result: `Battle zones set up: ${zones.map(z => z.name).join(', ')}. Combatants placed. Now write the battle log and call submit_battle_result.` }
+                    }
+                  }]
+                });
               } else if (funcName === 'submit_battle_result') {
                 // Native tool call for battle state update
                 let newState = null;
@@ -1532,6 +1680,26 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
                     : args.characterStates;
                 } catch (e) {
                   console.error("Failed to parse battle state from tool call", e);
+                }
+
+                // Process zone position updates
+                let combatantZones: Record<string, string> | null = null;
+                try {
+                  combatantZones = typeof args.combatantZones === 'string'
+                    ? JSON.parse(args.combatantZones)
+                    : args.combatantZones || null;
+                } catch (e) {
+                  console.error("Failed to parse combatant zones", e);
+                }
+
+                // Process zone description updates (destroyed cover, new hazards)
+                let zoneUpdates: { id: string; description: string }[] | null = null;
+                try {
+                  zoneUpdates = typeof args.zoneUpdates === 'string'
+                    ? JSON.parse(args.zoneUpdates)
+                    : args.zoneUpdates || null;
+                } catch (e) {
+                  console.error("Failed to parse zone updates", e);
                 }
 
                 let battlePositionUpdates = null;
@@ -1549,6 +1717,18 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
                   battlePositionUpdates,
                   room.players,
                 );
+
+                // Merge zone updates into mapState
+                const finalMapState = resolvedMapState ?? room.mapState;
+                if (combatantZones) {
+                  finalMapState.combatantZones = combatantZones;
+                }
+                if (zoneUpdates && finalMapState.zones) {
+                  for (const update of zoneUpdates) {
+                    const zone = finalMapState.zones.find((z: BattleZone) => z.id === update.id);
+                    if (zone) zone.description = update.description;
+                  }
+                }
                 
                 let thoughts = finalThoughts.trim();
                 let markdownLog = finalAnswer.trim();
@@ -1557,7 +1737,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
                   log: markdownLog,
                   thoughts: thoughts,
                   state: newState,
-                  mapState: resolvedMapState ?? room.mapState,
+                  mapState: finalMapState,
                 });
                 clearBattleStatusLog('battle-retry');
                 setRetryAttempt(0);
@@ -1658,6 +1838,19 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         if (alivePlayers.length <= 1) {
           const winner = alivePlayers[0] as any;
           const winnerName = winner ? winner.character.name : "No one";
+          const myName = characterRef.current?.name;
+          const isWin = !!(winner && myName && winner.character.name === myName);
+          setBattleOutcome(isWin ? 'win' : 'loss');
+          setCharacter(prev => {
+            if (!prev) return prev;
+            const b = (prev.battles || 0) + 1;
+            const w = (prev.wins || 0) + (isWin ? 1 : 0);
+            const l = (prev.losses || 0) + (isWin ? 0 : 1);
+            // Update fight counter in profileMarkdown
+            const counterLine = `**Battles: ${b}** (${w}W-${l}L)`;
+            const md = prev.profileMarkdown.replace(/^\*\*Battles: \d+\*\* \(\d+W-\d+L\)\n?/, '');
+            return { ...prev, battles: b, wins: w, losses: l, profileMarkdown: counterLine + '\n' + md };
+          });
           setBattleLogs(prev => [...prev, `**GAME OVER!** ${winnerName} is victorious!`]);
         } else {
           // If it's a bot match, trigger next bot action
@@ -1698,6 +1891,15 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       setRoomTypingIds([]);
       setLocalRoomTypingIds([]);
       setBattleInput('');
+      setBattleOutcome('loss'); // Inactivity counts as loss
+      setCharacter(prev => {
+        if (!prev) return prev;
+        const b = (prev.battles || 0) + 1;
+        const l = (prev.losses || 0) + 1;
+        const counterLine = `**Battles: ${b}** (${prev.wins || 0}W-${l}L)`;
+        const md = prev.profileMarkdown.replace(/^\*\*Battles: \d+\*\* \(\d+W-\d+L\)\n?/, '');
+        return { ...prev, battles: b, losses: l, profileMarkdown: counterLine + '\n' + md };
+      });
       setGameState('post_match');
     });
 
@@ -1977,6 +2179,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
             // Build enemy profile from world data if available
             const wd = worldDataRef.current;
             const enemy = wd?.enemies?.[tc.args.enemyId];
+            setCombatEnemyLoot(enemy?.loot || []);
             const fullProfile = enemy
               ? `# ${enemy.name}\n\n**HP:** ${enemy.hp}\n**Damage:** ${enemy.damage}\n\n${enemy.description}\n\n### Loot\n${enemy.loot?.map((l: string) => `- ${l}`).join('\n') || 'None'}`
               : enemyProfile;
@@ -1997,6 +2200,14 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
               moveExplorationStateToLocation(loc.id, loc.x, loc.y);
             }
             toolBadges.push(`🗺️ **Moved** — traveled to ${loc?.name || tc.args.locationId}`);
+          } else if (tc.name === 'move_to_subzone') {
+            const subZoneId = tc.args.subZoneId;
+            const loc = worldDataRef.current?.locations?.find((l: any) => l.id === explorationState.locationId);
+            const subZone = loc?.subZones?.find((sz: any) => sz.id === subZoneId);
+            if (subZone) {
+              setExplorationState(prev => ({ ...prev, subZoneId }));
+            }
+            toolBadges.push(`📍 **Moved** — went to ${subZone?.name || subZoneId}`);
           } else if (tc.name === 'trigger_pvp_duel') {
             // Server already handled PVP — just show badge
             if (tc.args.surprisedPlayerName && tc.args.openingStrikeDamage) {
@@ -2030,6 +2241,9 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         }
         return prev;
       });
+
+      // Trigger token compaction check
+      compactConversation();
     });
 
     socket.on('explorationRetry', (data: { requestId: string; attempt: number; delay: number; label: string }) => {
@@ -2514,7 +2728,8 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     apiKey: settingsRef.current.apiKey?.trim() || '',
     model: settingsRef.current.explorationModel,
     explorationState,
-    recentLog: explorationLog.slice(-10).map(m => `${m.role === 'user' ? 'Player' : 'Guide'}: ${m.text}`)
+    recentLog: explorationLog.slice(-30).map(m => `${m.role === 'user' ? 'Player' : 'Guide'}: ${m.text}`),
+    summary: explorationSummary || undefined,
   });
 
   const isImmediateExplorationAction = (action: string) => {
@@ -3408,8 +3623,11 @@ Be creative and concise.`;
                         <Check className="w-3 h-3" /> Locked in
                       </span>
                     ) : isTyping ? (
-                      <span className="inline-flex items-center justify-center rounded-full bg-white/95 px-2 py-1 text-duo-blue shadow-sm border border-duo-blue/20">
+                      <span className="inline-flex items-center gap-1 justify-center rounded-full bg-white/95 px-2 py-1 text-duo-blue shadow-sm border border-duo-blue/20">
                         <TypingDots dotClassName="h-1.5 w-1.5" />
+                        {id.startsWith('bot_') && botRewriteAttempt > 0 && (
+                          <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-yellow-400 text-[9px] font-black text-yellow-900">{botRewriteAttempt}</span>
+                        )}
                       </span>
                     ) : null}
                   </div>
@@ -3807,8 +4025,403 @@ Be creative and concise.`;
     return '🙂';
   };
 
+  const [showSubZoneMap, setShowSubZoneMap] = useState(false);
+  const [showZoneDetail, setShowZoneDetail] = useState<string | null>(null);
+
+  const renderExplorationSubZoneMap = () => {
+    const currentLoc = worldData?.locations?.find((l: any) => l.id === explorationState.locationId);
+    const subZones = currentLoc?.subZones || [];
+    if (subZones.length === 0) return null;
+
+    const currentSubZoneId = explorationState.subZoneId || subZones[0]?.id;
+    const mapW = 140;
+    const mapH = 140;
+
+    const handleSubZoneTap = (szId: string) => {
+      if (showFullMap) {
+        const sz = subZones.find((s: any) => s.id === szId);
+        if (sz && szId !== currentSubZoneId) {
+          // Check if connected
+          const currentSz = subZones.find((s: any) => s.id === currentSubZoneId);
+          if (currentSz?.connections?.includes(szId)) {
+            setExplorationInput(`I move to ${sz.name}`);
+          }
+        }
+        setShowZoneDetail(showZoneDetail === szId ? null : szId);
+      } else {
+        setShowFullMap(true);
+      }
+    };
+
+    const renderSubZoneGraph = (w: number, h: number, interactive: boolean) => {
+      const gcx = w / 2;
+      const gcy = h / 2;
+      const gr = Math.min(w, h) / 2 - (interactive ? 60 : 22);
+      const positions: Record<string, { x: number; y: number }> = {};
+      subZones.forEach((sz: any, i: number) => {
+        const angle = (2 * Math.PI * i) / subZones.length - Math.PI / 2;
+        positions[sz.id] = {
+          x: gcx + gr * Math.cos(angle),
+          y: gcy + gr * Math.sin(angle),
+        };
+      });
+
+      return (
+        <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
+          {subZones.flatMap((sz: any) =>
+            (sz.connections || [])
+              .filter((connId: string) => connId > sz.id)
+              .map((connId: string) => {
+                const from = positions[sz.id];
+                const to = positions[connId];
+                if (!from || !to) return null;
+                return (
+                  <line
+                    key={`${sz.id}-${connId}`}
+                    x1={from.x} y1={from.y}
+                    x2={to.x} y2={to.y}
+                    stroke="rgba(255,255,255,0.3)"
+                    strokeWidth={interactive ? 2 : 1}
+                    strokeDasharray={interactive ? "6,3" : "3,2"}
+                  />
+                );
+              })
+          )}
+          {subZones.map((sz: any) => {
+            const pos = positions[sz.id];
+            if (!pos) return null;
+            const isCurrentSz = sz.id === currentSubZoneId;
+            const nodeRadius = interactive ? 28 : 12;
+            const isSelected = showZoneDetail === sz.id;
+
+            return (
+              <g key={sz.id} onClick={() => handleSubZoneTap(sz.id)} style={{ cursor: interactive ? 'pointer' : 'default' }}>
+                <circle
+                  cx={pos.x} cy={pos.y} r={nodeRadius}
+                  fill={isCurrentSz ? 'rgba(34, 197, 94, 0.3)' : 'rgba(255, 255, 255, 0.1)'}
+                  stroke={isCurrentSz ? '#22c55e' : 'rgba(255, 255, 255, 0.4)'}
+                  strokeWidth={isSelected ? 3 : interactive ? 2 : 1}
+                />
+                <text
+                  x={pos.x} y={pos.y - (interactive ? 36 : 16)}
+                  textAnchor="middle"
+                  fontSize={interactive ? 11 : 5}
+                  fontWeight="bold"
+                  fill={isCurrentSz ? '#22c55e' : 'white'}
+                  opacity={interactive ? 1 : 0.8}
+                >
+                  {sz.name}
+                </text>
+                {isCurrentSz && (
+                  <circle
+                    cx={pos.x} cy={pos.y} r={interactive ? 5 : 2.5}
+                    fill="#22c55e" stroke="white" strokeWidth={0.5}
+                  />
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      );
+    };
+
+    return (
+      <div className="relative" style={{ width: mapW, height: mapH }}>
+        {!showFullMap && (
+          <div
+            className="bg-emerald-900/80 rounded-xl border-2 border-duo-gray overflow-hidden relative cursor-pointer"
+            style={{ width: mapW, height: mapH }}
+            onClick={() => setShowFullMap(true)}
+          >
+            {renderSubZoneGraph(mapW, mapH, false)}
+            <div className="absolute top-1 left-1 bg-white/80 rounded px-1">
+              <span className="text-emerald-900 text-[8px] font-bold">{currentLoc?.name}</span>
+            </div>
+            <div className="absolute bottom-1 left-1">
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowSubZoneMap(false); }}
+                className="bg-white/80 rounded px-1 text-[8px] text-emerald-900 font-bold"
+              >
+                🗺️
+              </button>
+            </div>
+            <div className="absolute bottom-1 right-1 bg-white/80 rounded px-1">
+              <Maximize2 className="w-3 h-3 text-emerald-900" />
+            </div>
+          </div>
+        )}
+
+        {showFullMap && (
+          <div className="fixed inset-0 z-50 bg-black/60" onClick={() => { setShowFullMap(false); setShowZoneDetail(null); }}>
+            <div
+              className="absolute inset-4 bg-emerald-900/95 rounded-3xl border-2 border-duo-gray overflow-hidden flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between p-3">
+                <div>
+                  <span className="text-white font-black text-sm">{currentLoc?.name}</span>
+                  <span className="text-white/50 text-xs ml-2">Sub-Zones</span>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => { setShowSubZoneMap(false); }} className="bg-white/20 rounded-full px-3 py-1 text-white text-xs font-bold">
+                    🗺️ World
+                  </button>
+                  <button onClick={() => { setShowFullMap(false); setShowZoneDetail(null); }} className="bg-white rounded-full p-2 shadow-lg">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+              <div className="flex-1 relative">
+                {renderSubZoneGraph(window.innerWidth - 32, window.innerHeight - 140, true)}
+              </div>
+              {showZoneDetail && (() => {
+                const sz = subZones.find((s: any) => s.id === showZoneDetail);
+                if (!sz) return null;
+                const isConnected = subZones.find((s: any) => s.id === currentSubZoneId)?.connections?.includes(sz.id);
+                return (
+                  <div className="p-3 bg-emerald-950/80 border-t border-white/10">
+                    <div className="text-white font-black text-sm">{sz.name}</div>
+                    <div className="text-white/70 text-xs mt-1">{sz.description}</div>
+                    {sz.id !== currentSubZoneId && isConnected && (
+                      <button
+                        onClick={() => {
+                          setExplorationInput(`I move to ${sz.name}`);
+                          setShowFullMap(false);
+                          setShowZoneDetail(null);
+                        }}
+                        className="mt-2 bg-emerald-600 text-white text-xs font-bold px-3 py-1 rounded-full"
+                      >
+                        Go here
+                      </button>
+                    )}
+                    {sz.id !== currentSubZoneId && !isConnected && (
+                      <div className="text-yellow-400/70 text-xs mt-1">Not directly connected — find a path first</div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderBattleZoneMap = () => {
+    const zones = battleMapState.zones || [];
+    const combatantZones = battleMapState.combatantZones || {};
+    const mapW = 140;
+    const mapH = 140;
+
+    // Layout zones in a circle for the mini view
+    const cx = mapW / 2;
+    const cy = mapH / 2;
+    const radius = Math.min(mapW, mapH) / 2 - 22;
+    const zonePositions: Record<string, { x: number; y: number }> = {};
+    zones.forEach((zone, i) => {
+      const angle = (2 * Math.PI * i) / zones.length - Math.PI / 2;
+      zonePositions[zone.id] = {
+        x: cx + radius * Math.cos(angle),
+        y: cy + radius * Math.sin(angle),
+      };
+    });
+
+    const myId = socket.id || '';
+    const myZoneId = Object.entries(combatantZones).find(([name]) => {
+      const pid = Object.entries(players).find(([, p]) => p.character?.name === name)?.[0];
+      return pid === myId;
+    })?.[1];
+
+    // Get combatant info per zone
+    const zoneOccupants: Record<string, { name: string; isMe: boolean }[]> = {};
+    for (const [charName, zoneId] of Object.entries(combatantZones)) {
+      if (!zoneOccupants[zoneId]) zoneOccupants[zoneId] = [];
+      const pid = Object.entries(players).find(([, p]) => p.character?.name === charName)?.[0];
+      zoneOccupants[zoneId].push({ name: charName, isMe: pid === myId });
+    }
+
+    const handleZoneTap = (zoneId: string) => {
+      if (showFullMap) {
+        // In expanded view, tapping sends a move command
+        const zone = zones.find(z => z.id === zoneId);
+        if (zone && zoneId !== myZoneId) {
+          setBattleInput(`I move to ${zone.name}`);
+        }
+        setShowZoneDetail(showZoneDetail === zoneId ? null : zoneId);
+      } else {
+        // Open expanded map
+        setShowFullMap(true);
+      }
+    };
+
+    const renderZoneGraph = (w: number, h: number, scale: number, interactive: boolean) => {
+      const gcx = w / 2;
+      const gcy = h / 2;
+      const gr = Math.min(w, h) / 2 - (interactive ? 60 : 22);
+      const positions: Record<string, { x: number; y: number }> = {};
+      zones.forEach((zone, i) => {
+        const angle = (2 * Math.PI * i) / zones.length - Math.PI / 2;
+        positions[zone.id] = {
+          x: gcx + gr * Math.cos(angle),
+          y: gcy + gr * Math.sin(angle),
+        };
+      });
+
+      return (
+        <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
+          {/* Connection lines */}
+          {zones.flatMap(zone =>
+            zone.connections
+              .filter(connId => connId > zone.id) // avoid duplicate lines
+              .map(connId => {
+                const from = positions[zone.id];
+                const to = positions[connId];
+                if (!from || !to) return null;
+                return (
+                  <line
+                    key={`${zone.id}-${connId}`}
+                    x1={from.x} y1={from.y}
+                    x2={to.x} y2={to.y}
+                    stroke="rgba(255,255,255,0.3)"
+                    strokeWidth={interactive ? 2 : 1}
+                    strokeDasharray={interactive ? "6,3" : "3,2"}
+                  />
+                );
+              })
+          )}
+          {/* Zone nodes */}
+          {zones.map(zone => {
+            const pos = positions[zone.id];
+            if (!pos) return null;
+            const occupants = zoneOccupants[zone.id] || [];
+            const isMyZone = zone.id === myZoneId;
+            const hasEnemy = occupants.some(o => !o.isMe);
+            const nodeRadius = interactive ? 28 : 12;
+            const isSelected = showZoneDetail === zone.id;
+
+            return (
+              <g key={zone.id} onClick={() => handleZoneTap(zone.id)} style={{ cursor: interactive ? 'pointer' : 'default' }}>
+                <circle
+                  cx={pos.x} cy={pos.y} r={nodeRadius}
+                  fill={isMyZone ? 'rgba(34, 197, 94, 0.3)' : hasEnemy ? 'rgba(239, 68, 68, 0.2)' : 'rgba(255, 255, 255, 0.1)'}
+                  stroke={isMyZone ? '#22c55e' : hasEnemy ? '#ef4444' : 'rgba(255, 255, 255, 0.4)'}
+                  strokeWidth={isSelected ? 3 : interactive ? 2 : 1}
+                />
+                {/* Zone name */}
+                <text
+                  x={pos.x} y={pos.y - (interactive ? 36 : 16)}
+                  textAnchor="middle"
+                  fontSize={interactive ? 11 : 5}
+                  fontWeight="bold"
+                  fill={isMyZone ? '#22c55e' : 'white'}
+                  opacity={interactive ? 1 : 0.8}
+                >
+                  {zone.name}
+                </text>
+                {/* Occupant dots */}
+                {occupants.map((occ, oi) => {
+                  const dotR = interactive ? 5 : 2.5;
+                  const dotX = pos.x + (oi - (occupants.length - 1) / 2) * (dotR * 2.5);
+                  const dotY = pos.y;
+                  return (
+                    <circle
+                      key={occ.name}
+                      cx={dotX} cy={dotY} r={dotR}
+                      fill={occ.isMe ? '#22c55e' : '#1cb0f6'}
+                      stroke="white" strokeWidth={0.5}
+                    />
+                  );
+                })}
+                {/* Occupant names in expanded view */}
+                {interactive && occupants.map((occ, oi) => (
+                  <text
+                    key={`name-${occ.name}`}
+                    x={pos.x}
+                    y={pos.y + nodeRadius + 12 + oi * 13}
+                    textAnchor="middle"
+                    fontSize={10}
+                    fontWeight="bold"
+                    fill={occ.isMe ? '#22c55e' : '#1cb0f6'}
+                  >
+                    {occ.name}
+                  </text>
+                ))}
+              </g>
+            );
+          })}
+        </svg>
+      );
+    };
+
+    return (
+      <div className="relative" style={{ width: mapW, height: mapH }}>
+        {!showFullMap && (
+          <div
+            className="bg-blue-900/80 rounded-xl border-2 border-duo-gray overflow-hidden relative cursor-pointer"
+            style={{ width: mapW, height: mapH }}
+            onClick={() => setShowFullMap(true)}
+          >
+            {renderZoneGraph(mapW, mapH, 1, false)}
+            <div className="absolute bottom-1 right-1 bg-white/80 rounded px-1">
+              <Maximize2 className="w-3 h-3 text-blue-900" />
+            </div>
+          </div>
+        )}
+
+        {showFullMap && (
+          <div className="fixed inset-0 z-50 bg-black/60" onClick={() => { setShowFullMap(false); setShowZoneDetail(null); }}>
+            <div
+              className="absolute inset-4 bg-blue-900/95 rounded-3xl border-2 border-duo-gray overflow-hidden flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between p-3">
+                <span className="text-white font-black text-sm">Battle Arena</span>
+                <button onClick={() => { setShowFullMap(false); setShowZoneDetail(null); }} className="bg-white rounded-full p-2 shadow-lg">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="flex-1 relative">
+                {renderZoneGraph(window.innerWidth - 32, window.innerHeight - 140, 1, true)}
+              </div>
+              {showZoneDetail && (() => {
+                const zone = zones.find(z => z.id === showZoneDetail);
+                if (!zone) return null;
+                const occupants = zoneOccupants[zone.id] || [];
+                return (
+                  <div className="p-3 bg-blue-950/80 border-t border-white/10">
+                    <div className="text-white font-black text-sm">{zone.name}</div>
+                    <div className="text-white/70 text-xs mt-1">{zone.description}</div>
+                    {occupants.length > 0 && (
+                      <div className="text-white/50 text-xs mt-1">
+                        Occupants: {occupants.map(o => o.name).join(', ')}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderMinimap = () => {
     if (!worldData) return null;
+
+    // Zone-based battle map (shown when battle zones exist)
+    const hasZones = gameState === 'battle' && battleMapState.zones && battleMapState.zones.length > 0 && battleMapState.combatantZones;
+    if (hasZones) {
+      return renderBattleZoneMap();
+    }
+
+    // Sub-zone map for exploration (when toggled and location has sub-zones)
+    const currentLocForSubZones = worldData?.locations?.find((l: any) => l.id === explorationState.locationId);
+    const hasSubZones = gameState === 'exploration' && currentLocForSubZones?.subZones?.length > 0;
+    if (hasSubZones && showSubZoneMap) {
+      return renderExplorationSubZoneMap();
+    }
+
     const isBattleMap = gameState === 'battle' && (
       battleMapState.discoveredLocations.length > 0 ||
       battleMapState.players.length > 0 ||
@@ -4074,6 +4687,14 @@ Be creative and concise.`;
             <div className="absolute bottom-1 right-1 bg-white/80 rounded px-1">
               <Maximize2 className="w-3 h-3 text-blue-900" />
             </div>
+            {hasSubZones && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowSubZoneMap(true); }}
+                className="absolute bottom-1 left-1 bg-white/80 rounded px-1 text-[8px] text-emerald-700 font-bold"
+              >
+                📍
+              </button>
+            )}
           </div>
         )}
 
@@ -4494,6 +5115,14 @@ Be creative and concise.`;
           </div>
         )}
 
+        {/* Compacting indicator */}
+        {isCompacting && (
+          <div className="px-3 py-1 bg-purple-50 border-t border-purple-200 flex items-center gap-2">
+            <span className="inline-block w-3 h-3 rounded-full bg-purple-400 animate-pulse" />
+            <span className="text-[10px] font-bold text-purple-600">Compacting memory...</span>
+          </div>
+        )}
+
         {/* Input */}
         <div className="p-3 bg-white border-t-2 border-duo-gray flex gap-2">
           <textarea
@@ -4670,6 +5299,14 @@ Be creative and concise.`;
     <div className="flex-1 flex flex-col items-center justify-center p-6 gap-8">
       <div className="text-center space-y-2">
         <h1 className="text-4xl font-black text-duo-text tracking-tight">Match Over!</h1>
+        {battleOutcome && (
+          <p className={`text-lg font-black ${battleOutcome === 'win' ? 'text-green-600' : 'text-red-500'}`}>
+            {battleOutcome === 'win' ? '🏆 Victory!' : '💀 Defeat...'}
+          </p>
+        )}
+        {explorationCombatReturn && battleOutcome === 'loss' && (
+          <p className="text-xs text-duo-gray-dark">You lost some gold from the defeat.</p>
+        )}
       </div>
 
       <div className="flex flex-col gap-4 w-full max-w-xs">
@@ -4703,9 +5340,30 @@ Be creative and concise.`;
           onClick={() => {
             if (explorationCombatReturn) {
               setExplorationCombatReturn(false);
-              if (character) setCharacter({ ...character, hp: Math.max(character.hp, 50), mana: Math.max(character.mana, 30) });
+              if (battleOutcome === 'win') {
+                // Victory: restore HP/mana, gain gold bonus, award loot
+                if (character) setCharacter({ ...character, hp: Math.max(character.hp, 50), mana: Math.max(character.mana, 30), gold: character.gold + 10 });
+                if (combatEnemyLoot.length > 0) {
+                  setExplorationState(prev => {
+                    const newInv = { ...prev.inventory };
+                    for (const item of combatEnemyLoot) { newInv[item] = (newInv[item] || 0) + 1; }
+                    return { ...prev, inventory: newInv };
+                  });
+                  setExplorationLog(prev => [...prev, { role: 'system', text: `🏆 You return victorious! +10 gold. Loot: ${combatEnemyLoot.join(', ')}` }]);
+                } else {
+                  setExplorationLog(prev => [...prev, { role: 'system', text: '🏆 You return victorious! +10 gold from the battle.' }]);
+                }
+              } else {
+                // Defeat: restore HP/mana but lose 25% gold
+                if (character) {
+                  const goldLost = Math.floor(character.gold * 0.25);
+                  setCharacter({ ...character, hp: Math.max(character.hp, 50), mana: Math.max(character.mana, 30), gold: Math.max(0, character.gold - goldLost) });
+                  setExplorationLog(prev => [...prev, { role: 'system', text: `💀 You return from defeat... Lost ${goldLost} gold.` }]);
+                }
+              }
+              setBattleOutcome(null);
+              setCombatEnemyLoot([]);
               setGameState('exploration');
-              setExplorationLog(prev => [...prev, { role: 'system', text: '🏕️ You return from battle to continue your exploration.' }]);
             } else {
               setActiveTab('home');
               setGameState('menu');

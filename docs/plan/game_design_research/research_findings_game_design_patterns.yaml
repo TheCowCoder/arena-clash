@@ -1,0 +1,217 @@
+plan_id: game_design_research
+objective: "Research game design patterns relevant to LLM-powered text RPG covering spatial systems, combat mechanics, island world design, LLM architecture patterns, PvP, and singleplayer progression"
+focus_area: game_design_patterns
+created_at: "2025-07-24"
+created_by: gem-researcher
+status: completed
+
+tldr: |
+  - Text RPGs work best with room/zone-based positioning (MUD model), not coordinate grids. Fate RPG's aspect system provides a direct model for AI-adjudicated narrative positioning.
+  - Sly Flourish's narrative combat and XCOM's cover system offer complementary patterns: AI as DM adjudicating intent + typed cover levels (full/half) with destruction and flanking.
+  - AI Dungeon's dual memory architecture (auto-summarization + embedding-based retrieval) directly solves the "AI forgets player choices" problem in LLM games.
+  - Hades and Slay the Spire define the gold standard for roguelike meta-progression: within-run power-ups, between-run permanent unlocks, 20-level difficulty scaling, and narrative integration through the death loop.
+  - Latitude.io's provider/model agnostic architecture is a critical lesson: abstract AI interfaces, evaluate models qualitatively, avoid vendor lock-in.
+
+research_metadata:
+  methodology: "Hybrid retrieval: fetch_webpage for 11 external sources across 4 rounds of parallel fetches (~40 URLs attempted, 11 succeeded). Wikipedia for factual game design content, Latitude.io blog for LLM architecture deep dives, Sly Flourish for narrative combat patterns, gamedeveloper.com for combat theory."
+  scope: "Broad survey across 6 game design domains: spatial/positioning, cover/terrain/distance, island world design, LLM patterns, PvP, singleplayer progression. Depth varies by domain — LLM patterns and combat mechanics deepest, PvP shallowest."
+  confidence: medium
+  coverage: 75
+  decision_blockers: 0
+  research_blockers: 1
+
+files_analyzed:
+  - file: research_findings.md
+    path: docs/research_findings.md
+    purpose: "Comprehensive markdown research document synthesizing all web research findings"
+    key_elements:
+      - element: "Zone-based positioning model"
+        type: pattern
+        location: "docs/research_findings.md:Section 1"
+        description: "Room/zone navigation from MUDs + Fate aspect system as positioning abstraction"
+      - element: "Narrative combat adjudication"
+        type: pattern
+        location: "docs/research_findings.md:Section 2"
+        description: "DM-style intent resolution from Sly Flourish + XCOM cover typing"
+      - element: "Dual memory architecture"
+        type: pattern
+        location: "docs/research_findings.md:Section 4"
+        description: "AI Dungeon's auto-summarization + embedding retrieval system"
+      - element: "Meta-progression framework"
+        type: pattern
+        location: "docs/research_findings.md:Section 6"
+        description: "Hades/Slay the Spire progression layers: within-run, between-run, difficulty scaling"
+    language: markdown
+    lines: 280
+
+patterns_found:
+  - category: architecture
+    pattern: "Room/zone-based spatial model"
+    description: "Text RPGs universally use discrete rooms/zones rather than coordinate grids. All occupants of a room share the same logical space. Movement is between zones, not within them."
+    examples:
+      - file: "MUD Wikipedia"
+        location: "https://en.wikipedia.org/wiki/Multi-user_dungeon"
+        snippet: "Due to the room-based nature, ranged combat is typically difficult to implement"
+      - file: "Fate RPG Wikipedia"
+        location: "https://en.wikipedia.org/wiki/Fate_(role-playing_game_system)"
+        snippet: "An aspect is a free-form descriptor of something notable about either the character or the scene"
+    prevalence: common
+
+  - category: architecture
+    pattern: "Intent-based action resolution"
+    description: "DM/AI describes the situation, player describes intent, system adjudicates outcome. No coordinate math needed."
+    examples:
+      - file: "Sly Flourish Narrative Combat"
+        location: "https://slyflourish.com/guide_to_narrative_combat.html"
+        snippet: "The DM describes the situation, the player describes what they want to do, the DM adjudicates the result"
+    prevalence: common
+
+  - category: architecture
+    pattern: "Dual memory: compression + retrieval"
+    description: "Auto-summarize recent events (every N actions) + embed all memories for cosine-similarity retrieval. Allocated context budget, progressive forgetting."
+    examples:
+      - file: "Latitude.io Memory System"
+        location: "https://latitude.io/news/how-the-new-memory-system-works"
+        snippet: "Memories are AI-generated summaries of 4 past actions... Memory Bank uses embedding models to rank memories by relevance"
+    prevalence: rare
+
+  - category: architecture
+    pattern: "Provider/model agnostic AI layer"
+    description: "Abstract AI interface to swap providers/models without code changes. Database-driven model configuration. Evaluate qualitatively and quantitatively."
+    examples:
+      - file: "Latitude.io 2x Context"
+        location: "https://latitude.io/news/how-we-gave-players-2x-context-on-ai-dungeon"
+        snippet: "Hosted Mixtral on 3 different providers... Can switch AI providers at any time with minimal effort"
+    prevalence: occasional
+
+  - category: structure
+    pattern: "Typed cover levels with destruction"
+    description: "Full cover vs half cover as discrete types. Cover can be destroyed. Flanking bypasses cover. Height provides advantage."
+    examples:
+      - file: "XCOM Wikipedia"
+        location: "https://en.wikipedia.org/wiki/XCOM:_Enemy_Unknown"
+        snippet: "Full cover (block icon) vs Half cover (shield icon)... Flanking warnings... Cover destruction via explosives"
+    prevalence: common
+
+  - category: structure
+    pattern: "Layered roguelike progression"
+    description: "Three layers: within-run power-ups (reset on death), between-run permanent unlocks, escalating difficulty levels (20 Ascension/Heat levels)."
+    examples:
+      - file: "Hades Wikipedia"
+        location: "https://en.wikipedia.org/wiki/Hades_(video_game)"
+        snippet: "Permanent upgrades... Pact of Punishment... 20+ Heat levels of escalating difficulty"
+      - file: "Slay the Spire Wikipedia"
+        location: "https://en.wikipedia.org/wiki/Slay_the_Spire"
+        snippet: "Up to 20 Ascension difficulty levels... each adding a cumulative negative effect"
+    prevalence: common
+
+  - category: structure
+    pattern: "Enemy intent telegraphing"
+    description: "Show players what enemies will do next. Reduces randomness frustration — losses feel earned rather than arbitrary."
+    examples:
+      - file: "Slay the Spire Wikipedia"
+        location: "https://en.wikipedia.org/wiki/Slay_the_Spire"
+        snippet: "Each opponent will telegraph what move they will make: if they will attack and with how much damage"
+    prevalence: common
+
+  - category: structure
+    pattern: "Island-grid world with progressive charting"
+    description: "World divided into grid sections containing islands. Sea chart progressively updated. Item-gated exploration. Fast travel critical to mitigate travel tedium."
+    examples:
+      - file: "Wind Waker Wikipedia"
+        location: "https://en.wikipedia.org/wiki/The_Legend_of_Zelda:_The_Wind_Waker"
+        snippet: "49 gridded sections of the Great Sea, each containing an island or island chain"
+    prevalence: occasional
+
+  - category: architecture
+    pattern: "Narrative progression through death loop"
+    description: "Death is canonical — characters return to hub. Each return unlocks new NPC dialog and storyline progression. Makes repeated play narrative-meaningful."
+    examples:
+      - file: "Hades Wikipedia"
+        location: "https://en.wikipedia.org/wiki/Hades_(video_game)"
+        snippet: "Between runs, Zagreus can explore the House of Hades... interact with various characters... which provide narrative elements"
+    prevalence: occasional
+
+  - category: architecture
+    pattern: "Distance as core combat challenge"
+    description: "Distance evaluation is one of three fundamental combat challenges (with time and anticipation). Enemy archetypes defined by their range role."
+    examples:
+      - file: "Fundamental Pillars of Combat"
+        location: "https://www.gamedeveloper.com/design/the-fundamental-pillars-of-a-combat-system"
+        snippet: "Enemy archetypes: shield/heavy/sniper/bomber — each defined by range relationship to player"
+    prevalence: common
+
+related_architecture:
+  components_relevant_to_domain:
+    - component: "Battle Judge AI"
+      responsibility: "Adjudicates combat outcomes from text actions"
+      location: "prompts/battle_judge.txt"
+      relationship_to_domain: "Primary system that needs spatial/cover/distance redesign"
+    - component: "World system"
+      responsibility: "Defines islands, locations, NPCs, enemies"
+      location: "world.json"
+      relationship_to_domain: "Needs zone-based restructuring for combat locations"
+    - component: "Bot player system"
+      responsibility: "AI-controlled opponents"
+      location: "prompts/bot_player.txt + bot_characters/"
+      relationship_to_domain: "Needs progression-aware difficulty scaling"
+  data_flow_involving_domain: "Player text action → AI battle judge (with zone/cover context) → outcome resolution → state update → narrative response"
+
+related_technology_stack:
+  languages_used_in_domain:
+    - TypeScript
+    - Markdown (prompts)
+  frameworks_used_in_domain:
+    - name: "Google Gemini (@google/genai)"
+      usage_in_domain: "Battle judge AI, exploration guide, character creation, bot player decisions"
+    - name: "React 19"
+      usage_in_domain: "Client-side game UI"
+    - name: "Socket.IO"
+      usage_in_domain: "Real-time multiplayer communication"
+
+related_conventions:
+  naming_patterns_in_domain: "snake_case for prompt files, camelCase for TypeScript"
+  structure_of_domain: "Prompt files in prompts/, bot personalities in bot_characters/, world data in world.json"
+  error_handling_in_domain: "Not researched — out of scope"
+  testing_in_domain: "Not researched — out of scope"
+  documentation_in_domain: "GUIDE.md for game design, IMPLEMENTATION_HISTORY.md for changelog"
+
+related_dependencies:
+  internal:
+    - component: "Battle state management"
+      relationship_to_domain: "Needs redesign from grid coords to zone-based positioning"
+      direction: bidirectional
+    - component: "Exploration system"
+      relationship_to_domain: "Location navigation already room-based — validates zone approach"
+      direction: inbound
+  external:
+    - name: "@google/genai"
+      purpose_for_domain: "LLM calls for battle judge, exploration, bot decisions"
+
+open_questions:
+  - question: "How should zone definitions be stored — in world.json per-location, or dynamically generated by AI per encounter?"
+    context: "Research shows zones need to be contextual to the encounter, but pre-defined zones enable consistent behavior"
+    type: decision_blocker
+    affects: ["battle_system_redesign"]
+  - question: "Should the memory/embedding system use a vector database or simpler in-memory cosine similarity?"
+    context: "AI Dungeon uses full embedding infrastructure, but What If is much smaller scale"
+    type: research
+    affects: ["memory_system"]
+  - question: "How to handle PvP fairness when AI adjudicates subjective positioning advantages?"
+    context: "MUD research shows text PvP is challenging due to discrete spatial model. Sly Flourish uses random target selection for fairness."
+    type: research
+    affects: ["pvp_balance"]
+
+gaps:
+  - area: "Multiplayer PvP in narrative games"
+    description: "Limited sources found. MUD PvP brief mentions only. No detailed analysis of modern text-based PvP systems found. Reddit (primary PvP discussion source) was blocked."
+    impact: research_blocker
+    affects: ["pvp_system_design"]
+  - area: "Fate SRD zone rules"
+    description: "The Fate SRD direct zone rules page returned 404 on both attempts. Zone mechanics were inferred from the broader Fate RPG Wikipedia article and Sly Flourish narrative combat."
+    impact: nice_to_know
+    affects: ["positioning_system"]
+  - area: "Bot AI behavior patterns"
+    description: "While Generative Agents paper provides high-level architecture, no sources found specifically about designing AI opponents for text-based combat games."
+    impact: nice_to_know
+    affects: ["bot_design"]

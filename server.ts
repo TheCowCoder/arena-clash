@@ -13,7 +13,7 @@ import { classifyAIError, createAIClient, formatAIError, getAIRetryDelaySeconds 
 dotenv.config();
 
 const MONGO_URI = process.env.MONGODB_URI || "";
-const JWT_SECRET = process.env.JWT_SECRET || "arena-clash-secret-key-change-in-prod";
+const JWT_SECRET = process.env.JWT_SECRET || "what-if-secret-key-change-in-prod";
 
 function getPrompt(filename: string) {
   return fs.readFileSync(path.join(process.cwd(), "prompts", filename), "utf8");
@@ -65,7 +65,7 @@ async function startServer() {
     try {
       const mongoClient = new MongoClient(MONGO_URI);
       await mongoClient.connect();
-      db = mongoClient.db("arena_clash");
+      db = mongoClient.db("what_if");
       console.log("Connected to MongoDB Atlas");
       
       // Ensure indexes
@@ -429,7 +429,7 @@ async function startServer() {
 
   const players: Record<string, any> = {};
   // Exploration: track players in the world
-  const explorationPlayers: Record<string, { socketId: string; character: any; locationId: string; x: number; y: number }> = {};
+  const explorationPlayers: Record<string, { socketId: string; character: any; locationId: string; subZoneId: string | null; x: number; y: number }> = {};
   // Track locked-in exploration actions: playerId -> action text
   const explorationLockedActions: Record<string, string> = {};
   // Track active exploration AI requests for abort-on-disconnect
@@ -475,6 +475,8 @@ async function startServer() {
     discoveredLocations: string[];
     players: BattleMapPlayerState[];
     npcs: BattleMapNpcState[];
+    zones?: { id: string; name: string; description: string; connections: string[] }[];
+    combatantZones?: Record<string, string>;
   }
 
   const emitExplorationPlayersUpdated = () => {
@@ -732,6 +734,8 @@ async function startServer() {
       ]),
       players,
       npcs,
+      zones: nextMapState?.zones ?? previousMapState.zones,
+      combatantZones: nextMapState?.combatantZones ?? previousMapState.combatantZones,
     };
   };
 
@@ -1461,6 +1465,17 @@ async function startServer() {
       }
     },
     {
+      name: "move_to_subzone",
+      description: "Move the player to a connected sub-zone within the current location. Call when the player moves between sub-zones.",
+      parameters: {
+        type: "OBJECT",
+        properties: {
+          subZoneId: { type: "STRING", description: "The ID of the sub-zone to move to (must be connected to current sub-zone)" }
+        },
+        required: ["subZoneId"]
+      }
+    },
+    {
       name: "trigger_pvp_duel",
       description: "Challenge another player to a PVP duel. Use when players want to fight, spar, or duel each other.",
       parameters: {
@@ -1492,7 +1507,7 @@ async function startServer() {
   async function handleExplorationAI(
     io: Server,
     action: string,
-    playerContexts: { socketId: string; playerName: string; locationId: string; character: any; explorationState: any; recentLog: string[] }[],
+    playerContexts: { socketId: string; playerName: string; locationId: string; character: any; explorationState: any; recentLog: string[]; summary?: string }[],
     apiKey: string,
     model: string,
     abortSignal?: AbortSignal,
@@ -1517,6 +1532,20 @@ async function startServer() {
     const es = primary.explorationState;
     const c = primary.character;
 
+    // Sub-zone context
+    const subZones = currentLoc?.subZones || [];
+    const currentSubZoneId = es?.subZoneId || (subZones.length > 0 ? subZones[0].id : null);
+    const currentSubZone = subZones.find((sz: any) => sz.id === currentSubZoneId);
+    const connectedSubZones = currentSubZone
+      ? (currentSubZone.connections || []).map((cid: string) => subZones.find((sz: any) => sz.id === cid)).filter(Boolean)
+      : [];
+
+    const subZoneContext = subZones.length > 0 ? `
+CURRENT SUB-ZONE: ${currentSubZone?.name || 'Entry'} (${currentSubZoneId})
+SUB-ZONE DESCRIPTION: ${currentSubZone?.description || ''}
+CONNECTED SUB-ZONES: ${connectedSubZones.map((sz: any) => `${sz.name} (${sz.id})`).join(', ') || 'none'}
+ALL SUB-ZONES HERE: ${subZones.map((sz: any) => `${sz.name} (${sz.id})`).join(', ')}` : '';
+
     const worldContext = `
 CURRENT LOCATION: ${currentLoc?.name || 'Unknown'} (${currentLoc?.id})
 DESCRIPTION: ${currentLoc?.description || ''}
@@ -1526,7 +1555,7 @@ EXITS: ${connectedLocs.map((l: any) => `${l.name} (${l.id})`).join(', ')}
 NPCs HERE: ${npcsAtLocation.map((n: any) => `${n?.name} - ${n?.role}`).join(', ') || 'none'}
 ENEMIES HERE: ${enemiesAtLocation.map((e: any) => `${e?.name} (HP:${e?.hp}, DMG:${e?.damage})`).join(', ') || 'none'}
 OTHER PLAYERS HERE: ${[...otherPlayersHere, ...playerContexts.slice(1).map(p => p.playerName)].join(', ') || 'none'}
-
+${subZoneContext}
 PLAYER STATE:
 - HP: ${c?.hp}/${c?.maxHp}, Mana: ${c?.mana}/${c?.maxMana}
 - Hunger: ${es?.hunger}/100, Thirst: ${es?.thirst}/100, Stamina: ${es?.stamina}/100
@@ -1541,7 +1570,8 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
 `;
 
     const recentLog = primary.recentLog.slice(-10).map((m: string) => m).join('\n');
-    const prompt = `${worldContext}\n\nRECENT CONVERSATION:\n${recentLog}\n\nPLAYER ACTION: ${action}`;
+    const summaryPrefix = primary.summary ? `CONVERSATION SUMMARY (earlier events):\n${primary.summary}\n\n` : '';
+    const prompt = `${worldContext}\n\n${summaryPrefix}RECENT CONVERSATION:\n${recentLog}\n\nPLAYER ACTION: ${action}`;
 
     const apiConfig = {
       model,
@@ -1648,6 +1678,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
               const ep = explorationPlayers[primary.socketId];
               if (ep) {
                 ep.locationId = locId;
+                ep.subZoneId = null;
                 ep.x = loc.x;
                 ep.y = loc.y;
                 for (const npc of Object.values(explorationNpcs)) {
@@ -1662,6 +1693,13 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
                 emitExplorationPlayersUpdated();
                 emitExplorationNpcStatesUpdated();
               }
+            }
+            processedToolCalls.push({ name: tc.name, args: tc.args });
+          } else if (tc.name === 'move_to_subzone') {
+            const subZoneId = tc.args?.subZoneId;
+            const ep = explorationPlayers[primary.socketId];
+            if (ep) {
+              ep.subZoneId = subZoneId;
             }
             processedToolCalls.push({ name: tc.name, args: tc.args });
           } else if (tc.name === 'set_npc_follow_state') {
@@ -1803,6 +1841,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         socketId: socket.id,
         character: players[socket.id].character,
         locationId: spawn.locationId,
+        subZoneId: null,
         x: spawn.x,
         y: spawn.y
       };
@@ -1961,7 +2000,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
     });
 
     // Solo exploration action — client sends action + context, server makes AI call
-    socket.on("explorationAction", (data: { action: string; apiKey: string; model: string; explorationState: any; recentLog: string[] }) => {
+    socket.on("explorationAction", (data: { action: string; apiKey: string; model: string; explorationState: any; recentLog: string[]; summary?: string }) => {
       const ep = explorationPlayers[socket.id];
       if (!ep) return;
       (ep as any)._state = data.explorationState;
@@ -1985,7 +2024,8 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
           locationId: ep.locationId,
           character: ep.character,
           explorationState: data.explorationState,
-          recentLog: data.recentLog || []
+          recentLog: data.recentLog || [],
+          summary: data.summary
         }],
         apiKey,
         data.model || 'gemini-3-flash-preview',
@@ -1996,7 +2036,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       });
     });
 
-    socket.on("explorationLockIn", (data: { action: string; apiKey?: string; model?: string; explorationState?: any; recentLog?: string[] }) => {
+    socket.on("explorationLockIn", (data: { action: string; apiKey?: string; model?: string; explorationState?: any; recentLog?: string[]; summary?: string }) => {
       const ep = explorationPlayers[socket.id];
       if (!ep) return;
       explorationLockedActions[socket.id] = data.action;
@@ -2006,7 +2046,8 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         apiKey: data.apiKey,
         model: data.model,
         explorationState: data.explorationState,
-        recentLog: data.recentLog
+        recentLog: data.recentLog,
+        summary: data.summary
       };
       
       const allPlayers = Object.entries(explorationPlayers);
@@ -2049,7 +2090,8 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
             locationId: p.locationId,
             character: p.character,
             explorationState: ctx.explorationState || {},
-            recentLog: ctx.recentLog || []
+            recentLog: ctx.recentLog || [],
+            summary: ctx.summary
           };
         });
 
@@ -2498,6 +2540,16 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
   room.players[socket.id].autoLockedThisTurn = false;
       io.to(roomId).emit("playerUnlocked", socket.id);
       startRoomTimer(roomId);
+    });
+
+    socket.on("battleZonesSetup", (data: { zones: any[]; combatantZones: Record<string, string> }) => {
+      const roomId = players[socket.id]?.room;
+      if (!roomId) return;
+      const room = rooms[roomId];
+      if (!room?.mapState) return;
+      room.mapState.zones = data.zones;
+      room.mapState.combatantZones = data.combatantZones;
+      emitBattleMapState(roomId);
     });
 
     socket.on("submitTurnResolution", (data) => {

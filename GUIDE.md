@@ -1,4 +1,4 @@
-# Arena Clash — Complete Feature Guide
+# What If — Complete Feature Guide
 
 ## Getting Started
 
