@@ -1167,6 +1167,7 @@ export default function App() {
     }
 
     // Fire a quick AI call to finalize the character
+    setMessages(prev => [...prev, { role: 'system', text: '⏰ Time running out — auto-saving your character...' }]);
     (async () => {
       setIsWaitingForChar(true);
       try {
