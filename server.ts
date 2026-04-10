@@ -27,6 +27,8 @@ async function startServer() {
     cors: {
       origin: "*",
     },
+    pingTimeout: 120_000,   // 2 min — prevents disconnect when phone goes to background
+    pingInterval: 30_000,
   });
 
   app.use(express.json({ limit: '25mb' }));
@@ -1717,7 +1719,14 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
             const subZoneId = tc.args?.subZoneId;
             const ep = explorationPlayers[primary.socketId];
             if (ep) {
-              ep.subZoneId = subZoneId;
+              // Validate sub-zone exists in the current location
+              const currentLoc = worldData?.locations?.find((l: any) => l.id === ep.locationId);
+              const validSubZone = currentLoc?.subZones?.find((sz: any) => sz.id === subZoneId);
+              if (validSubZone) {
+                ep.subZoneId = subZoneId;
+              } else {
+                console.warn(`[SubZone] Invalid subZoneId "${subZoneId}" for location "${ep.locationId}" — ignoring`);
+              }
             }
             processedToolCalls.push({ name: tc.name, args: tc.args });
           } else if (tc.name === 'set_npc_follow_state') {

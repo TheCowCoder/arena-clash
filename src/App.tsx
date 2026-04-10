@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import Markdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
-import { Home, User, Users, Shield, Heart, Send, Check, Loader2, Sword, Settings, ChevronDown, ArrowLeft, AlertTriangle, Info, Compass, Map, Star, ChevronUp, Maximize2, Minimize2, Target, Beef, GlassWater, Zap, Package, X, Eye, Coins, Orbit } from 'lucide-react';
+import { Home, User, Users, Heart, Send, Check, Loader2, Sword, Settings, ChevronDown, ArrowLeft, AlertTriangle, Info, Compass, Map, Star, ChevronUp, Maximize2, Minimize2, Target, Beef, GlassWater, Zap, Package, X, Eye, Coins, Orbit } from 'lucide-react';
 import { classifyAIError, createAIClient, formatAIError, getAIRetryDelaySeconds } from '../ai';
 
 declare global {
@@ -3065,17 +3065,20 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     setIsGeneratingBattleImage(true);
     try {
       const aiClient = getAIClient();
-      // Get battle log entries for scene context — filter out status/stream markers
-      const recentLogs = battleLogs
+      // Extract the most recent player actions (what players actually declared)
+      const lastActions = [...battleLogs].reverse().find(l => l.startsWith(BATTLE_PLAYER_ACTIONS_PREFIX));
+      const playerActions = lastActions ? lastActions.substring(BATTLE_PLAYER_ACTIONS_PREFIX.length) : '';
+      // Get the most recent narrative log (judge's turn result)
+      const narrativeLogs = battleLogs
         .filter(l => !l.startsWith('STREAMING_') && !l.startsWith('>') && !l.startsWith('PLAYER_ACTIONS_') && !l.startsWith(BATTLE_PENDING_ACTION_PREFIX) && !l.startsWith('STATUS_IMAGE'))
-        .slice(-5)
+        .slice(-2)
         .join('\n')
-        .substring(0, 1200);
+        .substring(0, 800);
       const playerDescriptions = Object.values(players).map((p: any) => {
         const c = p.character;
         return `${c.name} (HP: ${c.hp}/${c.maxHp}, Mana: ${c.mana}/${c.maxMana})`;
       }).join(' vs ');
-      const prompt = `Generate a dramatic battle scene illustration showing exactly what just happened:\n\nCombatants: ${playerDescriptions}\n\nRecent battle events:\n${recentLogs}\n\nStyle: Dynamic fantasy RPG battle art. Show the specific attacks, spells, and effects described in the events. Dramatic action poses, magical effects, particle effects, vibrant colors, cinematic composition. No text, no UI, no health bars, no labels.`;
+      const prompt = `Generate a dramatic battle scene illustration showing EXACTLY what is described below. Focus on the SPECIFIC ACTIONS — do NOT draw a generic standoff.\n\nCombatants: ${playerDescriptions}\n\n${playerActions ? `CRITICAL — Players declared these actions (SHOW THESE):\n${playerActions}\n\n` : ''}What happened this turn:\n${narrativeLogs}\n\nStyle: Dynamic fantasy RPG battle art. Show the SPECIFIC attacks, grapples, spells, and physical interactions described above — characters should be in direct contact/action, NOT standing apart. Dramatic action poses, magical effects, vibrant colors, cinematic composition. No text, no UI, no health bars, no labels.`;
 
       const response = await aiClient.models.generateContent({
         model: 'gemini-3-pro-image-preview',
@@ -3204,8 +3207,24 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
                 <ArrowLeft className="w-6 h-6" />
               </button>
             )}
-            <Shield className="w-6 h-6" />
-            <span className="uppercase text-sm truncate max-w-[120px]">{charName}</span>
+            <button
+              onClick={() => {
+                if (character?.profileMarkdown) {
+                  setProfileToView(character.profileMarkdown);
+                  setShowProfileModal(true);
+                }
+              }}
+              className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+            >
+              {character?.imageUrl ? (
+                <img src={character.imageUrl} alt="" className="w-7 h-7 rounded-full object-cover border-2 border-duo-gray" />
+              ) : (
+                <div className="w-7 h-7 rounded-full bg-duo-gray flex items-center justify-center">
+                  <User className="w-4 h-4 text-duo-gray-dark" />
+                </div>
+              )}
+              <span className="uppercase text-sm truncate max-w-[120px]">{charName}</span>
+            </button>
           </div>
           <div className="flex items-center gap-4 font-bold text-lg">
             {gameState !== 'menu' && (
