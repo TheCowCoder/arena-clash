@@ -1139,6 +1139,112 @@ export default function App() {
     }
   }, [arenaPreparation]);
 
+  // Auto-save character when tweak timer expires
+  const autoSaveTriggeredRef = useRef(false);
+  useEffect(() => {
+    // Reset when leaving prep
+    if (gameState !== 'arena_prep') {
+      autoSaveTriggeredRef.current = false;
+      return;
+    }
+    if (!arenaPreparation || arenaPreparation.stage !== 'tweak') return;
+    const myId = socket.id || '';
+    if (!myId || players[myId]?.lockedIn || isWaitingForChar) return;
+    if (autoSaveTriggeredRef.current) return;
+
+    const myRemaining = arenaPreparation.playerRemaining[myId];
+    if (typeof myRemaining !== 'number' || myRemaining > 5) return;
+
+    // Timer is about to expire — auto-save the character from chat history
+    autoSaveTriggeredRef.current = true;
+    const currentChar = characterRef.current;
+    const chatHistory = messages.filter(m => m.role !== 'system');
+
+    // If there's no chat history beyond the initial prompt, just lock in with existing character
+    if (chatHistory.length <= 1 || !currentChar) {
+      socket.emit('passArenaPreparation');
+      return;
+    }
+
+    // Fire a quick AI call to finalize the character
+    (async () => {
+      setIsWaitingForChar(true);
+      try {
+        const aiClient = getAIClient();
+        const contents = chatHistory.map(m => ({
+          role: m.role === 'user' ? 'user' : 'model',
+          parts: [{ text: m.text }]
+        }));
+        // Add a final user message asking to finalize
+        contents.push({
+          role: 'user',
+          parts: [{ text: 'Time is up! Save the character now with all the changes we discussed. Use the save_character tool immediately.' }]
+        });
+
+        const saveCharacterTool = {
+          name: "save_character",
+          description: "Save or update the character state.",
+          parameters: {
+            type: "OBJECT",
+            properties: {
+              name: { type: "STRING", description: "The character's name" },
+              hp: { type: "INTEGER", description: "Current HP" },
+              maxHp: { type: "INTEGER", description: "Max HP" },
+              mana: { type: "INTEGER", description: "Current Mana" },
+              maxMana: { type: "INTEGER", description: "Max Mana" },
+              gold: { type: "INTEGER", description: "Current gold coins" },
+              profileMarkdown: { type: "STRING", description: "Character profile markdown" }
+            },
+            required: ["name", "hp", "maxHp", "mana", "maxMana", "profileMarkdown"]
+          }
+        };
+
+        const sysPromptRes = await fetch(`${BACKEND_URL}/api/prompts/char_creator.txt`);
+        const sysPrompt = await sysPromptRes.text();
+        let fullSysPrompt = sysPrompt + `\n\nExisting Character Profile:\n${JSON.stringify(currentChar)}\n\nIMPORTANT: The user's time is running out. Save the character IMMEDIATELY with the save_character tool, incorporating all changes discussed so far.`;
+
+        const response = await aiClient.models.generateContent({
+          model: settingsRef.current.charModel,
+          contents,
+          config: {
+            systemInstruction: fullSysPrompt,
+            temperature: 0.3,
+            tools: [{ functionDeclarations: [saveCharacterTool as any] }],
+            toolConfig: { functionCallingConfig: { mode: 'ANY' as any } },
+          },
+        });
+
+        const parts = response.candidates?.[0]?.content?.parts || [];
+        let saved = false;
+        for (const part of parts) {
+          if ((part as any).functionCall?.name === 'save_character') {
+            const state = (part as any).functionCall.args;
+            socket.emit('characterCreated', {
+              name: state.name || currentChar.name,
+              hp: state.hp || currentChar.hp,
+              maxHp: state.maxHp || currentChar.maxHp,
+              mana: state.mana || currentChar.mana,
+              maxMana: state.maxMana || currentChar.maxMana,
+              gold: state.gold ?? currentChar.gold ?? DEFAULT_STARTING_GOLD,
+              profileMarkdown: state.profileMarkdown || currentChar.profileMarkdown,
+            });
+            saved = true;
+            break;
+          }
+        }
+        if (!saved) {
+          // Fallback: lock in with existing character
+          socket.emit('passArenaPreparation');
+        }
+      } catch (error) {
+        console.error('Auto-save character failed:', error);
+        socket.emit('passArenaPreparation');
+      } finally {
+        setIsWaitingForChar(false);
+      }
+    })();
+  }, [gameState, arenaPreparation, players, isWaitingForChar, messages, getAIClient]);
+
   useEffect(() => {
     const lockedInIds = Object.entries(players)
       .filter(([, player]) => !!player?.lockedIn)
@@ -1827,15 +1933,16 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
           console.error("Error resolving turn:", error);
 
           // Treat chunk-timeout aborts and retryable API errors the same way
-          const isAbort = error?.name === 'AbortError' || error?.message === 'Aborted';
+          const isAbort = error?.name === 'AbortError' || error?.name === 'APIUserAbortError' || error?.message === 'Aborted' || /abort/i.test(error?.message || '');
           const errorInfo = classifyAIError(error);
 
           if (errorInfo.retryable || isAbort) {
             attempts++;
             const delay = getAIRetryDelaySeconds(attempts);
             setRetryAttempt(attempts);
-            setBattleError(`Waiting for model (${attempts})...`);
-            upsertBattleStatusLog('battle-retry', `⏳ Waiting for model (${attempts})...`);
+            const reason = isAbort ? 'timeout' : errorInfo.label;
+            setBattleError(`Waiting for model (${attempts}) — ${reason}`);
+            upsertBattleStatusLog('battle-retry', `⏳ Waiting for model (${attempts}) — ${reason}`);
             await new Promise(resolve => setTimeout(resolve, delay * 1000));
             continue;
           }
@@ -1897,12 +2004,8 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
           }
         }
       setIsLockedIn(false);
-      // Auto-generate battle scene image after turn resolution (only resolver generates)
-      const playerIds = Object.keys(data.players);
-      const isFirstPlayer = playerIds[0] === socket.id;
-      if (isFirstPlayer) {
-        setTimeout(() => handleGenerateBattleImageRef.current?.(), 500);
-      }
+      // Auto-generate battle scene image after turn resolution (each client generates their own)
+      setTimeout(() => handleGenerateBattleImageRef.current?.(), 500);
     });
 
     socket.on('battleEndedByInactivity', (data: { log: string }) => {
@@ -2660,7 +2763,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         console.error("Error creating character:", error);
 
         // Treat abort (timeout) as retryable
-        const isAbort = error?.name === 'AbortError' || error?.message === 'Aborted';
+        const isAbort = error?.name === 'AbortError' || error?.name === 'APIUserAbortError' || error?.message === 'Aborted' || /abort/i.test(error?.message || '');
         const errorInfo = classifyAIError(error);
 
         if (errorInfo.retryable || isAbort) {
@@ -2675,8 +2778,9 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
           attempts++;
           const delay = getAIRetryDelaySeconds(attempts);
           setCharCreatorRetryAttempt(attempts);
-          setCharCreatorError(`Waiting for model (${attempts})...`);
-          upsertChatStatusMessage('char-creator-retry', `⏳ Waiting for model (${attempts})...`);
+          const reason = isAbort ? 'timeout' : errorInfo.label;
+          setCharCreatorError(`Waiting for model (${attempts}) — ${reason}`);
+          upsertChatStatusMessage('char-creator-retry', `⏳ Waiting for model (${attempts}) — ${reason}`);
           await new Promise(resolve => setTimeout(resolve, delay * 1000));
           continue;
         }
@@ -2985,12 +3089,8 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         if ((part as any).inlineData) {
           const imageData = (part as any).inlineData;
           const imageUrl = `data:${imageData.mimeType};base64,${imageData.data}`;
-          setBattleLogs(prev => [...prev, `STATUS_IMAGE::🎨 **${character?.name || 'You'}** visualized the scene`, `STATUS_IMAGE_URL::${imageUrl}`]);
+          setBattleLogs(prev => [...prev, `STATUS_IMAGE::🎨 The scene takes shape...`, `STATUS_IMAGE_URL::${imageUrl}`]);
           setHasVisualizedThisTurn(true);
-          // Share with opponent
-          if (roomId) {
-            socket.emit('shareBattleImage', { roomId, imageUrl });
-          }
           return;
         }
       }
