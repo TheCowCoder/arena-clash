@@ -879,7 +879,13 @@ async function startServer() {
     const allHaveRewriteAccess = participantIds.every(playerId => room.phase === 'tweak' || !!room.players[playerId]?.prepSkippedPreview);
     const allLockedIn = participantIds.every(playerId => !!room.players[playerId]?.lockedIn);
     if (allHaveRewriteAccess && allLockedIn) {
-      startBattleRoom(roomId);
+      // Brief delay to let any pending AI streams finish rendering on clients
+      setTimeout(() => {
+        const r = rooms[roomId];
+        if (r && (r.phase === 'preview' || r.phase === 'tweak')) {
+          startBattleRoom(roomId);
+        }
+      }, 2500);
     }
   };
 

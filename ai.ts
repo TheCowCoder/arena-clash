@@ -146,5 +146,8 @@ export const formatAIError = (errorInfo: AIErrorInfo): string => {
 };
 
 export const getAIRetryDelaySeconds = (attempt: number): number => {
-  return Math.pow(2, Math.min(Math.max(attempt, 1), 6));
+  const base = Math.pow(2, Math.min(Math.max(attempt, 1), 6));
+  // Add ±25% jitter to stagger concurrent requests (e.g. PvP)
+  const jitter = base * (0.75 + Math.random() * 0.5);
+  return jitter;
 };

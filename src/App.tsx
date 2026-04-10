@@ -1182,8 +1182,8 @@ export default function App() {
     }, 2500);
 
     const rewriteBotProfile = async () => {
-      const maxRetries = 3;
-      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      let attempt = 0;
+      while (true) {
         if (cancelled || rewriteSubmitted) return;
         try {
           const aiClient = getAIClient();
@@ -1206,15 +1206,18 @@ export default function App() {
           return;
         } catch (error: any) {
           if (cancelled || rewriteSubmitted) return;
-          const isRetryable = error?.status === 503 || error?.status === 429 || error?.message?.includes('503') || error?.message?.includes('429');
-          if (isRetryable && attempt < maxRetries) {
-            setBotRewriteAttempt(attempt + 1);
-            await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 2000));
+          const errorInfo = classifyAIError(error);
+          if (errorInfo.retryable) {
+            attempt++;
+            setBotRewriteAttempt(attempt);
+            const delay = getAIRetryDelaySeconds(attempt);
+            await new Promise(resolve => setTimeout(resolve, delay * 1000));
             continue;
           }
           if (!rewriteSubmitted) {
             console.error('Failed to rewrite bot preparation profile', error);
           }
+          break;
         }
       }
 
@@ -2639,13 +2642,6 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
             return newMsgs;
           });
           attempts++;
-          if (attempts >= 5) {
-            const errorMsg = `[SYSTEM ERROR]: Failed after ${attempts} attempts. Please try again.`;
-            setMessages(prev => [...prev.filter(m => m.text), { role: 'system', text: errorMsg }]);
-            setCharCreatorRetryAttempt(0);
-            setCharCreatorError(errorMsg);
-            break;
-          }
           const delay = getAIRetryDelaySeconds(attempts);
           setCharCreatorRetryAttempt(attempts);
           setCharCreatorError(`Waiting for model (${attempts})...`);
@@ -3252,6 +3248,7 @@ Be creative and concise.`;
                   value={character?.name || ''}
                   onChange={(e) => handleSelectCharacter(e.target.value)}
                   className="flex-1 bg-duo-gray rounded-xl px-4 py-2 font-bold text-duo-text focus:outline-none border-b-4 border-gray-200"
+                  style={{ fontSize: '16px' }}
                 >
                   {characters.map(c => (
                     <option key={c.name} value={c.name}>{c.name}</option>
@@ -3351,6 +3348,7 @@ Be creative and concise.`;
                   value={selectedBotCharacter}
                   onChange={e => setSelectedBotCharacter(e.target.value)}
                   className="flex-1 bg-duo-gray rounded-xl px-3 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
+                  style={{ fontSize: '16px' }}
                 >
                   {botCharacters.map(c => (
                     <option key={c.id} value={c.id}>{c.name}</option>
@@ -3506,7 +3504,7 @@ Be creative and concise.`;
           placeholder="Type your response..."
           className="flex-1 bg-duo-gray rounded-2xl px-4 py-3 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue resize-none overflow-y-auto"
           rows={1}
-          style={{ minHeight: '48px', maxHeight: '50vh' }}
+          style={{ minHeight: '48px', maxHeight: '50vh', fontSize: '16px' }}
         />
         <button 
           onClick={handleSendCharMessage}
@@ -3756,7 +3754,7 @@ Be creative and concise.`;
                 placeholder="Describe exactly what you want to change before the duel starts..."
                 className="flex-1 bg-duo-gray rounded-2xl px-4 py-3 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue resize-none overflow-y-auto"
                 rows={1}
-                style={{ minHeight: '48px', maxHeight: '50vh' }}
+                style={{ minHeight: '48px', maxHeight: '50vh', fontSize: '16px' }}
                 disabled={isWaitingForChar || isPrepLockedIn}
               />
               <button
@@ -5458,6 +5456,7 @@ Be creative and concise.`;
                         onChange={e => setSettings({...settings, apiKey: e.target.value})}
                         className="w-full bg-duo-gray rounded-xl px-4 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue mb-2"
                         placeholder="Leave blank to use default"
+                        style={{ fontSize: '16px' }}
                       />
                       <button
                         onClick={async () => {
@@ -5481,6 +5480,7 @@ Be creative and concise.`;
                         value={settings.charModel}
                         onChange={e => setSettings({...settings, charModel: e.target.value})}
                         className="w-full bg-duo-gray rounded-xl px-4 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
+                        style={{ fontSize: '16px' }}
                       >
                         <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
                         <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
@@ -5494,6 +5494,7 @@ Be creative and concise.`;
                         value={settings.explorationModel}
                         onChange={e => setSettings({...settings, explorationModel: e.target.value})}
                         className="w-full bg-duo-gray rounded-xl px-4 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
+                        style={{ fontSize: '16px' }}
                       >
                         <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
                         <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
@@ -5507,6 +5508,7 @@ Be creative and concise.`;
                         value={settings.battleModel}
                         onChange={e => setSettings({...settings, battleModel: e.target.value})}
                         className="w-full bg-duo-gray rounded-xl px-4 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
+                        style={{ fontSize: '16px' }}
                       >
                         <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
                         <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
@@ -5520,6 +5522,7 @@ Be creative and concise.`;
                         value={settings.botModel}
                         onChange={e => setSettings({...settings, botModel: e.target.value})}
                         className="w-full bg-duo-gray rounded-xl px-4 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
+                        style={{ fontSize: '16px' }}
                       >
                         <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
                         <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
@@ -5590,7 +5593,8 @@ Be creative and concise.`;
                           max={300}
                           value={settings.arenaPreviewSeconds}
                           onChange={e => setSettings({ ...settings, arenaPreviewSeconds: Math.max(1, Math.min(300, parseInt(e.target.value) || 15)) })}
-                          className="w-full bg-duo-gray rounded-xl px-3 py-2 font-bold text-duo-text text-sm focus:outline-none focus:ring-2 focus:ring-duo-blue"
+                          className="w-full bg-duo-gray rounded-xl px-3 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
+                          style={{ fontSize: '16px' }}
                         />
                       </div>
                       <div className="flex-1">
@@ -5601,7 +5605,8 @@ Be creative and concise.`;
                           max={600}
                           value={settings.arenaTweakSeconds}
                           onChange={e => setSettings({ ...settings, arenaTweakSeconds: Math.max(1, Math.min(600, parseInt(e.target.value) || 120)) })}
-                          className="w-full bg-duo-gray rounded-xl px-3 py-2 font-bold text-duo-text text-sm focus:outline-none focus:ring-2 focus:ring-duo-blue"
+                          className="w-full bg-duo-gray rounded-xl px-3 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
+                          style={{ fontSize: '16px' }}
                         />
                       </div>
                     </div>
@@ -5644,6 +5649,7 @@ Be creative and concise.`;
                   onChange={e => setAuthUsername(e.target.value)}
                   placeholder="Username"
                   className="w-full bg-duo-gray rounded-xl px-4 py-3 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
+                  style={{ fontSize: '16px' }}
                 />
                 <input
                   type="password"
@@ -5652,6 +5658,7 @@ Be creative and concise.`;
                   onKeyDown={e => e.key === 'Enter' && handleAuth()}
                   placeholder="Password"
                   className="w-full bg-duo-gray rounded-xl px-4 py-3 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
+                  style={{ fontSize: '16px' }}
                 />
               </div>
               
