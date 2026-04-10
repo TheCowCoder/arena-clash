@@ -588,6 +588,7 @@ export default function App() {
       unlimitedTurnTime: false,
       arenaPreviewSeconds: 15,
       arenaTweakSeconds: 120,
+      battleTurnSeconds: 90,
     };
     const saved = localStorage.getItem('duo_settings');
     if (saved) {
@@ -615,18 +616,17 @@ export default function App() {
     // Only persist non-model settings to localStorage — models always use current defaults
     const { charModel, explorationModel, battleModel, botModel, ...persistedSettings } = settings;
     localStorage.setItem('duo_settings', JSON.stringify(persistedSettings));
-    // Sync debug settings to server for all players
-    if (authToken) {
-      fetch(`${BACKEND_URL}/api/settings`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
-        body: JSON.stringify({
-          unlimitedTurnTime: settings.unlimitedTurnTime,
-          arenaPreviewSeconds: settings.arenaPreviewSeconds,
-          arenaTweakSeconds: settings.arenaTweakSeconds,
-        }),
-      }).catch(() => {});
-    }
+    // Sync debug settings to server (shared across all players, no auth required)
+    fetch(`${BACKEND_URL}/api/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        unlimitedTurnTime: settings.unlimitedTurnTime,
+        arenaPreviewSeconds: settings.arenaPreviewSeconds,
+        arenaTweakSeconds: settings.arenaTweakSeconds,
+        battleTurnSeconds: settings.battleTurnSeconds,
+      }),
+    }).catch(() => {});
   }, [settings]);
 
   useEffect(() => {
@@ -746,7 +746,6 @@ export default function App() {
   const [charCreatorRetryAttempt, setCharCreatorRetryAttempt] = useState(0);
   const [charCreatorError, setCharCreatorError] = useState<string | null>(null);
   const charAbortRef = useRef<AbortController | null>(null);
-  const charGenerationIdRef = useRef(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // World & Exploration state
@@ -1115,7 +1114,6 @@ export default function App() {
       setMessages([]);
       setInputText('');
       setIsWaitingForChar(false);
-      charGenerationIdRef.current++;
       if (charAbortRef.current) { charAbortRef.current.abort(); charAbortRef.current = null; }
       setCharCreatorError(null);
       setCharCreatorRetryAttempt(0);
@@ -1128,7 +1126,6 @@ export default function App() {
     // Preserve chat from head-start rewrite; only show intro if no messages yet
     setMessages(prev => prev.length > 0 ? prev : [{ role: 'model', text: 'You have one rewrite window before the duel. Refine your legend now.' }]);
     setIsWaitingForChar(false);
-    charGenerationIdRef.current++;
     if (charAbortRef.current) { charAbortRef.current.abort(); charAbortRef.current = null; }
     setCharCreatorError(null);
     setCharCreatorRetryAttempt(0);
@@ -1209,17 +1206,15 @@ export default function App() {
           return;
         } catch (error: any) {
           if (cancelled || rewriteSubmitted) return;
+          attempt++;
+          setBotRewriteAttempt(attempt);
           const errorInfo = classifyAIError(error);
           if (errorInfo.retryable) {
-            attempt++;
-            setBotRewriteAttempt(attempt);
             const delay = getAIRetryDelaySeconds(attempt);
             await new Promise(resolve => setTimeout(resolve, delay * 1000));
             continue;
           }
-          if (!rewriteSubmitted) {
-            console.error('Failed to rewrite bot preparation profile', error);
-          }
+          console.error('Bot rewrite error (non-retryable):', error);
           break;
         }
       }
@@ -1401,12 +1396,6 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       setExplorationRetryAttempt(0);
       setExplorationError(null);
       activeExplorationStreamIdRef.current = null;
-      // Cancel any lingering char creator request from the prep phase
-      charGenerationIdRef.current++;
-      if (charAbortRef.current) { charAbortRef.current.abort(); charAbortRef.current = null; }
-      setIsWaitingForChar(false);
-      setCharCreatorError(null);
-      setCharCreatorRetryAttempt(0);
       socket.emit('explorationActing', { acting: false });
       if (data.isPvpExploration) setExplorationCombatReturn(true);
       setGameState('battle');
@@ -1463,8 +1452,9 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
-      abortControllerRef.current = new AbortController();
-      const signal = abortControllerRef.current.signal;
+      // Master signal: aborted only when a NEW requestTurnResolution arrives or game ends
+      const masterAbort = new AbortController();
+      abortControllerRef.current = masterAbort;
 
       const playerIds = Object.keys(room.players);
       const actionsLog = buildBattleActionsLog(room.players);
@@ -1563,13 +1553,18 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       clearBattleStatusLog('battle-retry');
 
       while (true) {
-        if (signal.aborted) break;
+        if (masterAbort.signal.aborted) break;
         setBattleError(null);
         setRetryAttempt(attempts);
 
+        // Per-attempt abort controller — chunk timeouts abort this without killing masterAbort
+        const attemptAbort = new AbortController();
+        const onMasterAbort = () => attemptAbort.abort();
+        masterAbort.signal.addEventListener('abort', onMasterAbort);
+
         try {
           while (true) {
-            if (signal.aborted) break;
+            if (attemptAbort.signal.aborted) break;
             const responseStream = await aiClient.models.generateContentStream({
               model: settingsRef.current.battleModel,
               contents: contents,
@@ -1590,8 +1585,17 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
             let streamedThoughts = "";
             let streamedAnswer = "";
 
+            // Chunk-level timeout (45s) — start NOW to cover the gap before first chunk
+            const BATTLE_CHUNK_TIMEOUT_MS = 45_000;
+            let battleChunkTimer: ReturnType<typeof setTimeout> | null = null;
+            const clearBattleChunkTimer = () => { if (battleChunkTimer) { clearTimeout(battleChunkTimer); battleChunkTimer = null; } };
+            battleChunkTimer = setTimeout(() => attemptAbort.abort(), BATTLE_CHUNK_TIMEOUT_MS);
+
+            try {
             for await (const chunk of responseStream) {
-              if (signal.aborted) break;
+              if (attemptAbort.signal.aborted) break;
+              clearBattleChunkTimer();
+              battleChunkTimer = setTimeout(() => attemptAbort.abort(), BATTLE_CHUNK_TIMEOUT_MS);
               const parts = chunk.candidates?.[0]?.content?.parts || [];
               for (const part of parts) {
                 modelParts.push(part);
@@ -1625,7 +1629,10 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
                 }
               }
             }
-            if (signal.aborted) break;
+            } finally {
+              clearBattleChunkTimer();
+            }
+            if (attemptAbort.signal.aborted) break;
 
             finalThoughts += streamedThoughts;
             finalAnswer += streamedAnswer;
@@ -1755,6 +1762,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
                   state: newState,
                   mapState: finalMapState,
                 });
+                masterAbort.signal.removeEventListener('abort', onMasterAbort);
                 clearBattleStatusLog('battle-retry');
                 setRetryAttempt(0);
                 setBattleError(null);
@@ -1803,6 +1811,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
                 state: newState,
                 mapState: resolvedMapState ?? room.mapState,
               });
+              masterAbort.signal.removeEventListener('abort', onMasterAbort);
               clearBattleStatusLog('battle-retry');
               setRetryAttempt(0);
               setBattleError(null);
@@ -1810,12 +1819,17 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
             }
           }
         } catch (error: any) {
-          if (error.name === 'AbortError') return;
+          masterAbort.signal.removeEventListener('abort', onMasterAbort);
+          // Genuine external abort (new turn, game over) — stop entirely
+          if (masterAbort.signal.aborted) return;
+
           console.error("Error resolving turn:", error);
 
+          // Treat chunk-timeout aborts and retryable API errors the same way
+          const isAbort = error?.name === 'AbortError' || error?.message === 'Aborted';
           const errorInfo = classifyAIError(error);
 
-          if (errorInfo.retryable) {
+          if (errorInfo.retryable || isAbort) {
             attempts++;
             const delay = getAIRetryDelaySeconds(attempts);
             setRetryAttempt(attempts);
@@ -2208,6 +2222,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
               unlimitedTurnTime: settingsRef.current.unlimitedTurnTime,
               arenaPreviewSeconds: settingsRef.current.arenaPreviewSeconds,
               arenaTweakSeconds: settingsRef.current.arenaTweakSeconds,
+              battleTurnSeconds: settingsRef.current.battleTurnSeconds,
             });
             toolBadges.push(`⚔️ **Combat Initiated** — engaging ${enemyName}!`);
           } else if (tc.name === 'move_to_location') {
@@ -2356,6 +2371,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
           ...(typeof data.unlimitedTurnTime === 'boolean' ? { unlimitedTurnTime: data.unlimitedTurnTime } : {}),
           ...(typeof data.arenaPreviewSeconds === 'number' ? { arenaPreviewSeconds: data.arenaPreviewSeconds } : {}),
           ...(typeof data.arenaTweakSeconds === 'number' ? { arenaTweakSeconds: data.arenaTweakSeconds } : {}),
+          ...(typeof data.battleTurnSeconds === 'number' ? { battleTurnSeconds: data.battleTurnSeconds } : {}),
         }));
       }
     }).catch(() => {});
@@ -2546,14 +2562,9 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       },
     };
 
-    const MAX_CHAR_RETRIES = 4;
     let attempts = 0;
-    const myGenerationId = ++charGenerationIdRef.current;
 
     while (true) {
-      // Bail out if the game state moved on (e.g. arena phase changed)
-      if (charGenerationIdRef.current !== myGenerationId) break;
-
       setCharCreatorError(null);
       setCharCreatorRetryAttempt(attempts);
 
@@ -2644,14 +2655,11 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       } catch (error: any) {
         console.error("Error creating character:", error);
 
-        // If externally cancelled (phase change, new generation), bail silently
-        if (charGenerationIdRef.current !== myGenerationId) break;
-
         // Treat abort (timeout) as retryable
         const isAbort = error?.name === 'AbortError' || error?.message === 'Aborted';
         const errorInfo = classifyAIError(error);
 
-        if ((errorInfo.retryable || isAbort) && attempts < MAX_CHAR_RETRIES) {
+        if (errorInfo.retryable || isAbort) {
           // Remove the empty model placeholder from failed attempt
           setMessages(prev => {
             const newMsgs = [...prev];
@@ -2669,9 +2677,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
           continue;
         }
 
-        const formattedError = (errorInfo.retryable || isAbort)
-          ? `Model unavailable after ${attempts + 1} attempts. Tap Send to try again.`
-          : formatAIError(errorInfo);
+        const formattedError = formatAIError(errorInfo);
         const errorMsg = `[SYSTEM ERROR]: Failed to generate response using model ${settingsRef.current.charModel}. ${formattedError}`;
         setMessages(prev => {
           const newMsgs = [...prev];
@@ -2682,15 +2688,12 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         });
         setCharCreatorRetryAttempt(0);
         setCharCreatorError(formattedError);
-        upsertChatStatusMessage('char-creator-retry', `⚠️ ${formattedError}`);
+        upsertChatStatusMessage('char-creator-retry', `⚠️ Character creator error: ${formattedError}`);
         break;
       }
     }
 
-    // Only touch UI state if we still own this generation
-    if (charGenerationIdRef.current === myGenerationId) {
-      setIsWaitingForChar(false);
-    }
+    setIsWaitingForChar(false);
   };
 
   // ============ EXPLORATION HANDLERS ============
@@ -3010,7 +3013,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       }
       return;
     }
-    socket.emit('enterArena', { unlimitedTurnTime: settingsRef.current.unlimitedTurnTime, arenaPreviewSeconds: settingsRef.current.arenaPreviewSeconds, arenaTweakSeconds: settingsRef.current.arenaTweakSeconds });
+    socket.emit('enterArena', { unlimitedTurnTime: settingsRef.current.unlimitedTurnTime, arenaPreviewSeconds: settingsRef.current.arenaPreviewSeconds, arenaTweakSeconds: settingsRef.current.arenaTweakSeconds, battleTurnSeconds: settingsRef.current.battleTurnSeconds });
   };
 
   const handleNewCharacter = () => {
@@ -3441,6 +3444,7 @@ Be creative and concise.`;
                     unlimitedTurnTime: settingsRef.current.unlimitedTurnTime,
                     arenaPreviewSeconds: settingsRef.current.arenaPreviewSeconds,
                     arenaTweakSeconds: settingsRef.current.arenaTweakSeconds,
+                    battleTurnSeconds: settingsRef.current.battleTurnSeconds,
                   });
                 }}
                 disabled={!selectedBotCharacter}
@@ -5327,6 +5331,7 @@ Be creative and concise.`;
                     unlimitedTurnTime: settingsRef.current.unlimitedTurnTime,
                     arenaPreviewSeconds: settingsRef.current.arenaPreviewSeconds,
                     arenaTweakSeconds: settingsRef.current.arenaTweakSeconds,
+                    battleTurnSeconds: settingsRef.current.battleTurnSeconds,
                   });
                 }}
                 disabled={!character}
@@ -5629,6 +5634,18 @@ Be creative and concise.`;
                           max={600}
                           value={settings.arenaTweakSeconds}
                           onChange={e => setSettings({ ...settings, arenaTweakSeconds: Math.max(1, Math.min(600, parseInt(e.target.value) || 120)) })}
+                          className="w-full bg-duo-gray rounded-xl px-3 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
+                          style={{ fontSize: '16px' }}
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <label className="block text-[11px] font-bold text-duo-gray-dark mb-1">Turn Time (s)</label>
+                        <input
+                          type="number"
+                          min={10}
+                          max={600}
+                          value={settings.battleTurnSeconds}
+                          onChange={e => setSettings({ ...settings, battleTurnSeconds: Math.max(10, Math.min(600, parseInt(e.target.value) || 60)) })}
                           className="w-full bg-duo-gray rounded-xl px-3 py-2 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue"
                           style={{ fontSize: '16px' }}
                         />

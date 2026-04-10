@@ -302,10 +302,10 @@ async function startServer() {
     }
   });
 
-  app.post("/api/settings", authenticateToken, async (req: any, res) => {
+  app.post("/api/settings", async (req: any, res) => {
     if (!db) return res.status(503).json({ error: "Database not available" });
     try {
-      const allowedKeys = ['unlimitedTurnTime', 'arenaPreviewSeconds', 'arenaTweakSeconds'];
+      const allowedKeys = ['unlimitedTurnTime', 'arenaPreviewSeconds', 'arenaTweakSeconds', 'battleTurnSeconds'];
       const data: Record<string, any> = {};
       for (const key of allowedKeys) {
         if (req.body[key] !== undefined) data[key] = req.body[key];
@@ -329,6 +329,7 @@ async function startServer() {
     unlimitedTurnTime?: boolean;
     arenaPreviewSeconds?: number;
     arenaTweakSeconds?: number;
+    battleTurnSeconds?: number;
   }
   let matchmakingQueue: Record<string, QueuePlayer> = {};
   const rooms: Record<string, any> = {};
@@ -337,7 +338,7 @@ async function startServer() {
   const typingChannelMembers: Record<string, Set<string>> = {};
   const typingChannelBySocket: Record<string, string> = {};
   const typingTimeouts: Record<string, NodeJS.Timeout> = {};
-  const TURN_TIMER_SECONDS = 60;
+  const TURN_TIMER_SECONDS = 90;
   const ARENA_PREVIEW_SECONDS = 15;
   const ARENA_TWEAK_SECONDS = 120;
 
@@ -351,9 +352,10 @@ async function startServer() {
       return;
     }
 
-    roomTimers[roomId] = { interval: null as any, remaining: TURN_TIMER_SECONDS };
+    const turnDuration = (typeof room.battleTurnSeconds === 'number' && room.battleTurnSeconds >= 10) ? room.battleTurnSeconds : TURN_TIMER_SECONDS;
+    roomTimers[roomId] = { interval: null as any, remaining: turnDuration };
 
-    io.to(roomId).emit("turnTimerTick", { remaining: TURN_TIMER_SECONDS });
+    io.to(roomId).emit("turnTimerTick", { remaining: turnDuration });
 
     roomTimers[roomId].interval = setInterval(() => {
       const timer = roomTimers[roomId];
@@ -1087,6 +1089,7 @@ async function startServer() {
       host: challengerId,
       isBotMatch: false,
       isPvpExploration: true,
+      battleTurnSeconds: TURN_TIMER_SECONDS,
       players: {
         [challengerId]: { lockedIn: false, action: "", character: challengerCharacter },
         [targetId]: { lockedIn: false, action: "", character: targetCharacter },
@@ -1780,29 +1783,22 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         if (error.message === "Aborted") throw error;
 
         const errorInfo = classifyAIError(error);
-
-        if (errorInfo.retryable) {
-          attempts++;
-          const delay = getAIRetryDelaySeconds(attempts);
-          // Notify players retrying
-          for (const pc of playerContexts) {
-            io.to(pc.socketId).emit("explorationRetry", {
-              requestId,
-              attempt: attempts,
-              delay,
-              label: errorInfo.label,
-            });
-          }
-          await new Promise(resolve => setTimeout(resolve, delay * 1000));
-          continue;
-        }
-
-        // Final error — notify all players
-        const formattedError = formatAIError(errorInfo);
+        attempts++;
+        const delay = getAIRetryDelaySeconds(attempts);
+        // Notify players retrying
         for (const pc of playerContexts) {
-          io.to(pc.socketId).emit("explorationActionError", { requestId, message: formattedError });
+          io.to(pc.socketId).emit("explorationRetry", {
+            requestId,
+            attempt: attempts,
+            delay,
+            label: errorInfo.label,
+          });
         }
-        return;
+        if (!errorInfo.retryable) {
+          console.error("Exploration AI non-retryable error (still retrying):", formatAIError(errorInfo));
+        }
+        await new Promise(resolve => setTimeout(resolve, delay * 1000));
+        continue;
       }
     }
   }
@@ -2229,6 +2225,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         host: data.challengerId,
         isBotMatch: false,
         isPvpExploration: true,
+        battleTurnSeconds: TURN_TIMER_SECONDS,
         players: {
           [data.challengerId]: { lockedIn: false, action: "", character: challenger.character },
           [socket.id]: { lockedIn: false, action: "", character: accepter.character },
@@ -2314,6 +2311,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         unlimitedTurnTime: !!data.unlimitedTurnTime,
         arenaPreviewSeconds: typeof data.arenaPreviewSeconds === 'number' ? data.arenaPreviewSeconds : ARENA_PREVIEW_SECONDS,
         arenaTweakSeconds: typeof data.arenaTweakSeconds === 'number' ? data.arenaTweakSeconds : ARENA_TWEAK_SECONDS,
+        battleTurnSeconds: typeof data.battleTurnSeconds === 'number' ? data.battleTurnSeconds : TURN_TIMER_SECONDS,
         botDifficulty: difficulty,
         npcAllyIds: npcAllies.map((n: any) => `npc_ally_${n.id}`),
         players: roomPlayers,
@@ -2328,7 +2326,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       startArenaPreparation(roomId);
     });
 
-    socket.on("enterArena", (data?: { unlimitedTurnTime?: boolean; arenaPreviewSeconds?: number; arenaTweakSeconds?: number }) => {
+    socket.on("enterArena", (data?: { unlimitedTurnTime?: boolean; arenaPreviewSeconds?: number; arenaTweakSeconds?: number; battleTurnSeconds?: number }) => {
       if (!players[socket.id]?.character) {
         socket.emit("error", "Create a character first.");
         return;
@@ -2341,6 +2339,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         unlimitedTurnTime: !!data?.unlimitedTurnTime,
         arenaPreviewSeconds: typeof data?.arenaPreviewSeconds === 'number' ? data.arenaPreviewSeconds : undefined,
         arenaTweakSeconds: typeof data?.arenaTweakSeconds === 'number' ? data.arenaTweakSeconds : undefined,
+        battleTurnSeconds: typeof data?.battleTurnSeconds === 'number' ? data.battleTurnSeconds : undefined,
       };
       socket.join("matchmaking_lobby");
       io.to("matchmaking_lobby").emit("queueUpdated", Object.values(matchmakingQueue));
@@ -2376,6 +2375,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
             unlimitedTurnTime: queueList.some(p => p.unlimitedTurnTime),
             arenaPreviewSeconds: queueList.find(p => typeof p.arenaPreviewSeconds === 'number')?.arenaPreviewSeconds ?? ARENA_PREVIEW_SECONDS,
             arenaTweakSeconds: queueList.find(p => typeof p.arenaTweakSeconds === 'number')?.arenaTweakSeconds ?? ARENA_TWEAK_SECONDS,
+            battleTurnSeconds: queueList.find(p => typeof p.battleTurnSeconds === 'number')?.battleTurnSeconds ?? TURN_TIMER_SECONDS,
             isBotMatch: false,
             mapState: buildArenaBattleMapState(roomPlayers),
             phase: 'preview',
