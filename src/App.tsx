@@ -3688,14 +3688,6 @@ Be creative and concise.`;
             </div>
           )}
           <div className="flex gap-2">
-          <button
-            onClick={handleGenerateBattleImage}
-            disabled={isGeneratingBattleImage || hasVisualizedThisTurn || battleLogs.length < 2}
-            className={`duo-btn px-3 flex items-center justify-center disabled:opacity-50 transition-all ${isGeneratingBattleImage ? 'bg-duo-gray border-b-0 translate-y-1' : (hasVisualizedThisTurn ? 'bg-duo-gray cursor-not-allowed grayscale' : 'duo-btn-gray')}`}
-            title={hasVisualizedThisTurn ? "Already visualized this turn" : "Visualize Battle"}
-          >
-            {isGeneratingBattleImage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />}
-          </button>
           <textarea
             ref={battleInputRef}
             value={battleInput}
