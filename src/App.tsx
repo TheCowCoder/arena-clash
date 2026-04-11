@@ -14,7 +14,29 @@ declare global {
   }
 }
 
-const socket: Socket = io();
+const CLIENT_SESSION_STORAGE_KEY = 'arena_clash_session_id';
+const getClientSessionId = () => {
+  try {
+    const stored = localStorage.getItem(CLIENT_SESSION_STORAGE_KEY);
+    if (stored) return stored;
+    const generated = crypto.randomUUID?.() || `session_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(CLIENT_SESSION_STORAGE_KEY, generated);
+    return generated;
+  } catch {
+    return `session_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  }
+};
+
+const socket: Socket = io(undefined, {
+  auth: {
+    sessionId: getClientSessionId(),
+  },
+  reconnection: true,
+  reconnectionDelay: 1_000,
+  reconnectionDelayMax: 5_000,
+  reconnectionAttempts: Infinity,
+  closeOnBeforeunload: false,  // Keep connection across tab switches
+});
 
 type Tab = 'home' | 'profile' | 'social';
 type GameState = 'menu' | 'char_creation' | 'matchmaking' | 'arena_prep' | 'battle' | 'post_match' | 'exploration' | 'level_select';
@@ -678,6 +700,7 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [isWaitingForChar, setIsWaitingForChar] = useState(false);
+  const [connectionPhase, setConnectionPhase] = useState<'online' | 'reconnecting' | 'reconnected'>('online');
   const [charCreatorRetryAttempt, setCharCreatorRetryAttempt] = useState(0);
   const [charCreatorError, setCharCreatorError] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -892,10 +915,45 @@ export default function App() {
 
   useEffect(() => {
     socket.on('characterSynced', () => setIsSynced(true));
-    socket.on('disconnect', () => setIsSynced(false));
+    socket.on('disconnect', (reason) => {
+      setIsSynced(false);
+      if (reason === 'io server disconnect') {
+        setConnectionPhase('online');
+      } else if (reason === 'io client disconnect' || reason === 'transport error' || reason === 'ping timeout') {
+        setConnectionPhase('reconnecting');
+      }
+    });
+    
+    // Reconnection listeners on socket.io manager
+    socket.io.on('reconnect_attempt', () => {
+      setConnectionPhase('reconnecting');
+    });
+    
+    socket.io.on('reconnect_error', () => {
+      setConnectionPhase('reconnecting');
+    });
+    
+    socket.io.on('reconnect_failed', () => {
+      setConnectionPhase('online');
+    });
+    
+    // Listen for successful reconnection
+    socket.on('connect', () => {
+      setConnectionPhase('online');
+      // Flash "reconnected" message briefly
+      if (!socket.recovered) {
+        setConnectionPhase('reconnected');
+        setTimeout(() => setConnectionPhase('online'), 2000);
+      }
+    });
+    
     return () => {
       socket.off('characterSynced');
       socket.off('disconnect');
+      socket.off('connect');
+      socket.io.off('reconnect_attempt');
+      socket.io.off('reconnect_error');
+      socket.io.off('reconnect_failed');
     };
   }, []);
 
@@ -2765,6 +2823,15 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
             </button>
           </div>
         </div>
+        {connectionPhase !== 'online' && (
+          <div className={`px-4 py-1.5 text-[10px] font-black uppercase border-t text-center transition-colors ${
+            connectionPhase === 'reconnecting' 
+              ? 'bg-amber-50 text-amber-700 border-amber-200' 
+              : 'bg-green-50 text-green-700 border-green-200'
+          }`}>
+            {connectionPhase === 'reconnecting' ? '🔄 Reconnecting...' : '✓ Reconnected!'}
+          </div>
+        )}
         {gameState === 'battle' && (
           <>
             <div className="px-4 py-2 border-t border-duo-gray/30 flex flex-wrap gap-2">
@@ -3900,8 +3967,7 @@ Be creative and concise.`;
               );
             })}
             </div>
-            {/* Center crosshair */}
-            <div className="absolute rounded-full border-2 border-duo-green/70" style={{ left: mapW/2 - 4, top: mapH/2 - 4, width: 8, height: 8, pointerEvents: 'none' }} />
+            {/* Center dot for player position */}
             <div className="absolute rounded-full bg-duo-green shadow-[0_0_10px_rgba(34,197,94,0.75)]" style={{ left: mapW / 2 - 2, top: mapH / 2 - 2, width: 4, height: 4, pointerEvents: 'none' }} />
             {/* Compass */}
             <span className="absolute top-0.5 left-1/2 -translate-x-1/2 text-[8px] font-black text-red-400/80 pointer-events-none">N</span>
