@@ -722,7 +722,12 @@ export default function App() {
     setExplorationLog(prev => prev.filter(message => message.streamId !== statusId));
   }, []);
 
-  // Keep refs in sync with state
+  // Initialize character creation screen
+  useEffect(() => {
+    if (gameState === 'char_creation' && messages.length === 0) {
+      setMessages([{ role: 'model', text: "Welcome, Architect! 🎭\n\nDescribe your legend—tell me who they are, their background, powers, or quirks. I'll forge them into a champion." }]);
+    }
+  }, [gameState]);
   useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
   useEffect(() => { playersRef.current = players; }, [players]);
   useEffect(() => { battleLogsRef.current = battleLogs; }, [battleLogs]);
@@ -823,6 +828,11 @@ export default function App() {
       if (pendingRoom) { generateNpcAllyActions(pendingRoom, pendingRoom.turnId); generateBotAction(pendingRoom, pendingRoom.turnId); }
     }
   };
+
+  // Assign handleGenerateBattleImage to ref for socket listener access
+  useEffect(() => {
+    handleGenerateBattleImageRef.current = handleGenerateBattleImage;
+  }, [handleGenerateBattleImage]);
 
   const generateBotAction = async (currentRoom: any, turnId?: number) => {
     if (!currentRoom || !currentRoom.isBotMatch || botActionInFlightRef.current) return;
@@ -974,7 +984,7 @@ export default function App() {
           <button onClick={() => { if (character) setGameState('char_creation'); }} className="duo-btn duo-btn-blue w-full py-3">{character ? 'Tweak Legend' : 'Build Legend'}</button>
           <button onClick={handleEnterArena} className="duo-btn duo-btn-green w-full py-3">Enter Arena</button>
           <button onClick={handlePlayBot} className="duo-btn duo-btn-blue w-full py-3">1v1 vs Bot</button>
-          <button onClick={() => { socket.emit('enterExploration', {}); setGameState('exploration'); }} className="duo-btn duo-btn-blue w-full py-3">Explore World</button>
+          <button onClick={() => { socket.emit('enterExploration', {}); }} className="duo-btn duo-btn-blue w-full py-3">Explore World</button>
         </div>
       </div>
     </div>
@@ -1037,8 +1047,69 @@ export default function App() {
         <div ref={chatEndRef} />
       </div>
       <div className="p-2.5 composer-safe bg-white border-t border-duo-gray flex gap-2">
-        <textarea ref={charInputRef} value={inputText} onChange={e => setInputText(e.target.value)} placeholder="Describe your legend..." className="flex-1 bg-duo-gray rounded-2xl px-4 py-3 font-bold focus:outline-none resize-none" rows={1} />
-        <button onClick={() => { const t = inputText; setInputText(''); setMessages(prev => [...prev, { role: 'user', text: t }]); }} className="duo-btn duo-btn-blue px-6 flex items-center"><Send className="w-5 h-5" /></button>
+        <textarea ref={charInputRef} value={inputText} onChange={e => setInputText(e.target.value)} disabled={isWaitingForChar} placeholder="Describe your legend..." className="flex-1 bg-duo-gray rounded-2xl px-4 py-3 font-bold focus:outline-none resize-none" rows={1} />
+        <button onClick={async () => { 
+          const t = inputText.trim(); 
+          if (!t || isWaitingForChar) return;
+          setInputText(''); 
+          setMessages(prev => [...prev, { role: 'user', text: t }]); 
+          setIsWaitingForChar(true);
+          setCharCreatorRetryAttempt(0);
+          
+          try {
+            const aiClient = getAIClient();
+            setMessages(prev => [...prev, { role: 'system', text: '🎭 Architecting your legend...' }]);
+            const prompt = `Create a fantasy RPG character based on this description: "${t}"\n\nRespond with ONLY a valid markdown profile. Include: # Character Name, stats (HP, Mana, Gold), abilities, items, personality. Be concise.`;
+            
+            let attempts = 0;
+            while (true) {
+              try {
+                const res = await aiClient.models.generateContent({ 
+                  model: 'gemini-3-flash-preview', 
+                  contents: prompt,
+                  config: { temperature: 1 }
+                });
+                const responseText = res.text || '';
+                
+                // Extract name from markdown
+                const nameMatch = responseText.match(/^#\\s+(.+?)$/m);
+                const name = nameMatch?.[1]?.trim() || `Legend_${Date.now()}`;
+                
+                const newCharacter = normalizeCharacter({
+                  name,
+                  hp: 100,
+                  maxHp: 100,
+                  mana: 50,
+                  maxMana: 50,
+                  gold: 25,
+                  profileMarkdown: responseText,
+                  battles: 0,
+                  wins: 0,
+                  losses: 0,
+                });
+                
+                setCharacter(newCharacter);
+                setMessages(prev => [...prev, { role: 'system', text: `✓ **${name}** created! Syncing to server...` }]);
+                socket.emit('createCharacter', newCharacter);
+                break;
+              } catch (error: any) {
+                const errorInfo = classifyAIError(error);
+                if (errorInfo.retryable && attempts < 3) {
+                  attempts++;
+                  const delay = getAIRetryDelaySeconds(attempts);
+                  setMessages(prev => [...prev, { role: 'system', text: `🔄 Retrying... (Attempt ${attempts + 1}: ${errorInfo.label})` }]);
+                  await new Promise(resolve => setTimeout(resolve, delay * 1000));
+                  continue;
+                }
+                setCharCreatorError(formatAIError(errorInfo));
+                setMessages(prev => [...prev, { role: 'system', text: `⚠️ Error: ${formatAIError(errorInfo)}` }]);
+                break;
+              }
+            }
+          } finally {
+            setIsWaitingForChar(false);
+          }
+        }} disabled={!inputText.trim() || isWaitingForChar} className="duo-btn duo-btn-blue px-6 flex items-center"><Send className="w-5 h-5" /></button>
       </div>
     </div>
   );

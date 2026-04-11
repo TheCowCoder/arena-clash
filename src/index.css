@@ -43,6 +43,14 @@ input[type="number"] {
   height: 100dvh;
 }
 
+.pb-safe {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
+.composer-safe {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
 .duo-btn {
   @apply relative rounded-2xl font-bold uppercase tracking-wider text-white transition-transform active:translate-y-1;
 }

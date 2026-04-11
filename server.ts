@@ -343,8 +343,12 @@ async function startServer() {
   const TURN_TIMER_SECONDS = 90;
   const ARENA_PREVIEW_SECONDS = 15;
   const ARENA_TWEAK_SECONDS = 120;
+  const SESSION_RECONNECT_GRACE_MS = 45_000;
+  const socketSessionIds: Record<string, string> = {};
+  const sessionSocketIds: Record<string, string> = {};
+  const pendingDisconnects: Record<string, { socketId: string; timer: NodeJS.Timeout; explorationInterrupted: boolean }> = {};
 
-  function startRoomTimer(roomId: string) {
+  function startRoomTimer(roomId: string, startingRemaining?: number | null) {
     clearRoomTimer(roomId);
     const room = rooms[roomId];
     if (!room) return;
@@ -354,7 +358,11 @@ async function startServer() {
       return;
     }
 
-    const turnDuration = (typeof room.battleTurnSeconds === 'number' && room.battleTurnSeconds >= 10) ? room.battleTurnSeconds : TURN_TIMER_SECONDS;
+    const defaultTurnDuration = (typeof room.battleTurnSeconds === 'number' && room.battleTurnSeconds >= 10) ? room.battleTurnSeconds : TURN_TIMER_SECONDS;
+    const turnDuration = typeof startingRemaining === 'number' && startingRemaining > 0
+      ? Math.ceil(startingRemaining)
+      : defaultTurnDuration;
+    delete room.pausedTurnRemaining;
     roomTimers[roomId] = { interval: null as any, remaining: turnDuration };
 
     io.to(roomId).emit("turnTimerTick", { remaining: turnDuration });
@@ -382,12 +390,34 @@ async function startServer() {
     io.to(roomId).emit("turnTimerTick", { remaining: null });
   }
 
+  function appendRoomHistory(roomId: string, entries: string | string[]) {
+    const room = rooms[roomId];
+    if (!room) return;
+
+    if (!Array.isArray(room.history)) {
+      room.history = [];
+    }
+
+    const normalizedEntries = Array.isArray(entries) ? entries : [entries];
+    for (const entry of normalizedEntries) {
+      if (typeof entry !== 'string' || !entry.trim()) continue;
+      if (room.history[room.history.length - 1] === entry) continue;
+      room.history.push(entry);
+    }
+
+    if (room.history.length > 200) {
+      room.history = room.history.slice(-200);
+    }
+  }
+
   function emitBattleActionsSubmitted(roomId: string, room: { players: Record<string, any> }) {
     const log = Object.keys(room.players)
       .map(pid => `**${room.players[pid].character.name}:** ${room.players[pid].action}`)
       .join("\n\n");
 
-    io.to(roomId).emit("battleActionsSubmitted", { log: `PLAYER_ACTIONS_${log}` });
+    const payload = `PLAYER_ACTIONS_${log}`;
+    appendRoomHistory(roomId, payload);
+    io.to(roomId).emit("battleActionsSubmitted", { log: payload });
   }
 
   function requestTurnResolutionIfReady(roomId: string) {
@@ -406,6 +436,7 @@ async function startServer() {
     }
 
     room.lastResolutionRequestAt = now;
+    room.awaitingTurnResolution = true;
     clearRoomTimer(roomId);
     emitBattleActionsSubmitted(roomId, room);
     io.to(room.host).emit("requestTurnResolution", room);
@@ -413,8 +444,10 @@ async function startServer() {
 
   function endBattleDueToInactivity(roomId: string, room: { players: Record<string, any> }) {
     clearRoomTimer(roomId);
+    const inactivityLog = "**BATTLE ENDED.** Both fighters missed the turn, so the duel is called off.";
+    appendRoomHistory(roomId, inactivityLog);
     io.to(roomId).emit("battleEndedByInactivity", {
-      log: "**BATTLE ENDED.** Both fighters missed the turn, so the duel is called off.",
+      log: inactivityLog,
     });
 
     for (const pid of Object.keys(room.players)) {
@@ -440,6 +473,7 @@ async function startServer() {
         room.players[pid].action = `${room.players[pid].character.name} hesitates and takes a defensive stance, bracing for impact.`;
         io.to(roomId).emit("playerLockedIn", pid);
         io.to(roomId).emit("turnTimerAutoLocked", { playerId: pid, playerName: room.players[pid].character.name });
+        appendRoomHistory(roomId, `⏰ **${room.players[pid].character.name}** ran out of time and took a defensive stance!`);
         anyAutoLocked = true;
       }
     }
@@ -510,34 +544,35 @@ async function startServer() {
     combatantZones?: Record<string, string>;
   }
 
+  const getExplorationPlayersPayload = () => (
+    Object.values(explorationPlayers).map(p => ({
+      id: p.socketId,
+      name: p.character.name,
+      locationId: p.locationId,
+      x: p.x,
+      y: p.y,
+    }))
+  );
+
   const emitExplorationPlayersUpdated = () => {
-    io.to("exploration_world").emit(
-      "explorationPlayersUpdated",
-      Object.values(explorationPlayers).map(p => ({
-        id: p.socketId,
-        name: p.character.name,
-        locationId: p.locationId,
-        x: p.x,
-        y: p.y,
-      }))
-    );
+    io.to("exploration_world").emit("explorationPlayersUpdated", getExplorationPlayersPayload());
+  };
+
+  const getExplorationLockStatusPayload = () => {
+    const allPlayers = Object.entries(explorationPlayers);
+    if (allPlayers.length <= 1) {
+      return [];
+    }
+
+    return allPlayers.map(([id, player]) => ({
+      id,
+      name: player.character?.name || 'Unknown',
+      lockedIn: !!explorationLockedActions[id],
+    }));
   };
 
   const emitExplorationLockStatuses = () => {
-    const allPlayers = Object.entries(explorationPlayers);
-    if (allPlayers.length <= 1) {
-      io.to("exploration_world").emit("explorationLockStatus", []);
-      return;
-    }
-
-    io.to("exploration_world").emit(
-      "explorationLockStatus",
-      allPlayers.map(([id, player]) => ({
-        id,
-        name: player.character?.name || 'Unknown',
-        lockedIn: !!explorationLockedActions[id],
-      }))
-    );
+    io.to("exploration_world").emit("explorationLockStatus", getExplorationLockStatusPayload());
   };
 
   const getNpcOffset = (npcId: string) => {
@@ -570,8 +605,8 @@ async function startServer() {
 
   const explorationNpcs: Record<string, ExplorationNpcState> = createExplorationNpcStates();
 
-  const emitExplorationNpcStatesUpdated = () => {
-    io.to("exploration_world").emit("explorationNpcStatesUpdated", Object.values(explorationNpcs).map(npc => ({
+  const getExplorationNpcStatesPayload = () => (
+    Object.values(explorationNpcs).map(npc => ({
       id: npc.id,
       name: npc.name,
       role: npc.role,
@@ -580,7 +615,11 @@ async function startServer() {
       x: npc.x,
       y: npc.y,
       followTargetId: npc.followTargetId,
-    })));
+    }))
+  );
+
+  const emitExplorationNpcStatesUpdated = () => {
+    io.to("exploration_world").emit("explorationNpcStatesUpdated", getExplorationNpcStatesPayload());
   };
 
   const setNpcFollowState = (npcId: string, followTargetId: string | null) => {
@@ -864,12 +903,11 @@ async function startServer() {
     });
   };
 
-  const emitArenaPreparationState = (roomId: string) => {
+  const getArenaPreparationSnapshot = (roomId: string) => {
     const room = rooms[roomId];
-    const timer = arenaPreparationTimers[roomId];
-    if (!room || !timer) return;
+    const timer = arenaPreparationTimers[roomId] || room?.pausedArenaPreparation;
+    if (!room || !timer) return null;
 
-    // Compute per-player effective remaining during tweak stage
     const playerRemaining: Record<string, number> = {};
     if (timer.stage === 'tweak') {
       const participantIds = getArenaPreparationParticipantIds(room);
@@ -879,13 +917,27 @@ async function startServer() {
       }
     }
 
+    return {
+      stage: timer.stage,
+      remaining: timer.remaining,
+      playerRemaining,
+      tweakDuration: timer.tweakDuration,
+      skipVotes: timer.skipVotes,
+    };
+  };
+
+  const emitArenaPreparationState = (roomId: string) => {
+    const room = rooms[roomId];
+    const timer = getArenaPreparationSnapshot(roomId);
+    if (!room || !timer) return;
+
     io.to(roomId).emit('arenaPreparationState', {
       roomId,
       players: room.players,
       isBotMatch: !!room.isBotMatch,
       stage: timer.stage,
       remaining: timer.remaining,
-      playerRemaining,
+      playerRemaining: timer.playerRemaining,
       tweakDuration: timer.tweakDuration,
       skipVotes: timer.skipVotes,
     });
@@ -972,6 +1024,141 @@ async function startServer() {
     }
   };
 
+  const getHumanRoomParticipantIds = (room: any) => (
+    Object.keys(room?.players || {}).filter(playerId => !playerId.startsWith('bot_') && !room.players[playerId]?.character?.isNpcAlly)
+  );
+
+  const syncArenaPreparationTimerPlayerId = (timer: any, oldPlayerId: string, newPlayerId: string) => {
+    if (!timer) return;
+
+    if (Array.isArray(timer.skipVotes)) {
+      timer.skipVotes = timer.skipVotes.map((playerId: string) => playerId === oldPlayerId ? newPlayerId : playerId);
+    }
+
+    if (timer.playerPaused?.[oldPlayerId] !== undefined) {
+      timer.playerPaused[newPlayerId] = timer.playerPaused[oldPlayerId];
+      delete timer.playerPaused[oldPlayerId];
+    }
+
+    if (timer.playerBonusSeconds?.[oldPlayerId] !== undefined) {
+      timer.playerBonusSeconds[newPlayerId] = timer.playerBonusSeconds[oldPlayerId];
+      delete timer.playerBonusSeconds[oldPlayerId];
+    }
+  };
+
+  const startArenaPreparationInterval = (roomId: string) => {
+    const timer = arenaPreparationTimers[roomId];
+    if (!timer) return;
+
+    timer.interval = setInterval(() => {
+      const activeTimer = arenaPreparationTimers[roomId];
+      const activeRoom = rooms[roomId];
+      if (!activeTimer || !activeRoom) return;
+
+      activeTimer.remaining -= 1;
+
+      if (activeTimer.stage === 'tweak') {
+        for (const playerId of Object.keys(activeTimer.playerPaused)) {
+          if (activeTimer.playerPaused[playerId]) {
+            activeTimer.playerBonusSeconds[playerId] = (activeTimer.playerBonusSeconds[playerId] || 0) + 1;
+          }
+        }
+      }
+
+      if (activeTimer.remaining <= 0) {
+        if (activeTimer.stage === 'preview') {
+          startArenaPreparationTweakStage(roomId);
+          return;
+        }
+
+        const participantIds = getArenaPreparationParticipantIds(activeRoom);
+        const allExpired = participantIds.every(playerId => {
+          const bonus = activeTimer.playerBonusSeconds[playerId] || 0;
+          const effectiveRemaining = activeTimer.remaining + bonus;
+          return effectiveRemaining <= 0 && !activeTimer.playerPaused[playerId];
+        });
+
+        if (allExpired) {
+          startBattleRoom(roomId);
+          return;
+        }
+      }
+
+      emitArenaPreparationState(roomId);
+    }, 1000);
+  };
+
+  const pauseRoomForReconnect = (roomId: string) => {
+    const room = rooms[roomId];
+    if (!room) return;
+
+    if (room.readyTimeout) {
+      clearTimeout(room.readyTimeout);
+      delete room.readyTimeout;
+    }
+
+    const prepTimer = arenaPreparationTimers[roomId];
+    if (prepTimer) {
+      room.pausedArenaPreparation = {
+        stage: prepTimer.stage,
+        remaining: prepTimer.remaining,
+        skipVotes: [...prepTimer.skipVotes],
+        playerPaused: { ...prepTimer.playerPaused },
+        playerBonusSeconds: { ...prepTimer.playerBonusSeconds },
+        tweakDuration: prepTimer.tweakDuration,
+      };
+      clearArenaPreparationTimer(roomId);
+    }
+
+    const battleTimer = roomTimers[roomId];
+    if (battleTimer) {
+      room.pausedTurnRemaining = battleTimer.remaining;
+      clearRoomTimer(roomId);
+    }
+  };
+
+  const resumeRoomAfterReconnect = (roomId: string) => {
+    const room = rooms[roomId];
+    if (!room) return;
+
+    if (room.disconnectedParticipantIds instanceof Set && room.disconnectedParticipantIds.size > 0) {
+      return;
+    }
+
+    if (room.pendingReadyPlayers instanceof Set && room.pendingReadyPlayers.size > 0 && !room.readyTimeout) {
+      room.readyTimeout = setTimeout(() => {
+        delete room.pendingReadyPlayers;
+        delete room.readyTimeout;
+        if (rooms[roomId]) {
+          startRoomTimer(roomId);
+        }
+      }, 30_000);
+      return;
+    }
+
+    if (room.pausedArenaPreparation) {
+      arenaPreparationTimers[roomId] = {
+        interval: null as any,
+        stage: room.pausedArenaPreparation.stage,
+        remaining: room.pausedArenaPreparation.remaining,
+        skipVotes: [...room.pausedArenaPreparation.skipVotes],
+        playerPaused: { ...room.pausedArenaPreparation.playerPaused },
+        playerBonusSeconds: { ...room.pausedArenaPreparation.playerBonusSeconds },
+        tweakDuration: room.pausedArenaPreparation.tweakDuration,
+      };
+      delete room.pausedArenaPreparation;
+      emitArenaPreparationState(roomId);
+      startArenaPreparationInterval(roomId);
+      return;
+    }
+
+    if (typeof room.pausedTurnRemaining === 'number' && !room.pendingReadyPlayers) {
+      const remaining = room.pausedTurnRemaining;
+      delete room.pausedTurnRemaining;
+      startRoomTimer(roomId, remaining);
+    }
+  };
+
   const startArenaPreparationTweakStage = (roomId: string) => {
     const room = rooms[roomId];
     const timer = arenaPreparationTimers[roomId];
@@ -1001,7 +1188,11 @@ async function startServer() {
     if (!room) return;
 
     clearArenaPreparationTimer(roomId);
+    delete room.pausedArenaPreparation;
     room.phase = 'battle';
+    room.awaitingTurnResolution = false;
+    delete room.activeBattleStream;
+    room.history = ['**Match Found!** The battle begins.'];
     for (const playerId of Object.keys(room.players)) {
       room.players[playerId].lockedIn = false;
       room.players[playerId].action = "";
@@ -1043,45 +1234,7 @@ async function startServer() {
     };
 
     emitArenaPreparationState(roomId);
-
-    arenaPreparationTimers[roomId].interval = setInterval(() => {
-      const timer = arenaPreparationTimers[roomId];
-      const activeRoom = rooms[roomId];
-      if (!timer || !activeRoom) return;
-
-      timer.remaining -= 1;
-
-      // During tweak stage, accumulate bonus seconds for paused players
-      if (timer.stage === 'tweak') {
-        for (const playerId of Object.keys(timer.playerPaused)) {
-          if (timer.playerPaused[playerId]) {
-            timer.playerBonusSeconds[playerId] = (timer.playerBonusSeconds[playerId] || 0) + 1;
-          }
-        }
-      }
-
-      if (timer.remaining <= 0) {
-        if (timer.stage === 'preview') {
-          startArenaPreparationTweakStage(roomId);
-          return;
-        }
-
-        // During tweak: only start battle if all players' effective remaining <= 0 and none are paused
-        const participantIds = getArenaPreparationParticipantIds(activeRoom);
-        const allExpired = participantIds.every(playerId => {
-          const bonus = timer.playerBonusSeconds[playerId] || 0;
-          const effectiveRemaining = timer.remaining + bonus;
-          return effectiveRemaining <= 0 && !timer.playerPaused[playerId];
-        });
-
-        if (allExpired) {
-          startBattleRoom(roomId);
-          return;
-        }
-      }
-
-      emitArenaPreparationState(roomId);
-    }, 1000);
+    startArenaPreparationInterval(roomId);
   };
 
   const startExplorationPvpBattle = (challengerId: string, targetId: string, ambushTargetId?: string, openingStrikeDamage?: number) => {
@@ -1114,12 +1267,13 @@ async function startServer() {
       host: challengerId,
       isBotMatch: false,
       isPvpExploration: true,
+      phase: 'battle',
       battleTurnSeconds: TURN_TIMER_SECONDS,
       players: {
         [challengerId]: { lockedIn: false, action: "", character: challengerCharacter },
         [targetId]: { lockedIn: false, action: "", character: targetCharacter },
       },
-      history: [],
+      history: ['**Match Found!** The battle begins.'],
     };
 
     const matchData = {
@@ -1874,8 +2028,240 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
     }
   }
 
+  const buildSessionResumePayload = (socketId: string, explorationInterrupted = false) => {
+    const roomId = players[socketId]?.room;
+    const room = roomId ? rooms[roomId] : null;
+    const explorationPlayer = explorationPlayers[socketId] as any;
+
+    return {
+      room: room ? {
+        roomId,
+        host: room.host,
+        phase: room.phase || 'battle',
+        players: room.players,
+        mapState: room.mapState,
+        isBotMatch: !!room.isBotMatch,
+        isPvpExploration: !!room.isPvpExploration,
+        history: Array.isArray(room.history) ? room.history : [],
+        activeBattleStream: room.activeBattleStream && (room.activeBattleStream.thoughts || room.activeBattleStream.answer)
+          ? room.activeBattleStream
+          : null,
+        turnTimerRemaining: room.unlimitedTurnTime
+          ? null
+          : roomTimers[roomId!]?.remaining ?? room.pausedTurnRemaining ?? null,
+        arenaPreparation: getArenaPreparationSnapshot(roomId!),
+        awaitingNextTurnReady: !!room.pendingReadyPlayers?.has(socketId),
+        needsTurnResolution: room.phase === 'battle'
+          && Object.keys(room.players || {}).length > 0
+          && Object.keys(room.players || {}).every(playerId => !!room.players[playerId]?.lockedIn)
+          && !room.pendingReadyPlayers,
+      } : null,
+      exploration: explorationPlayer ? {
+        state: {
+          ...(explorationPlayer._state || {}),
+          locationId: explorationPlayer.locationId,
+          subZoneId: explorationPlayer.subZoneId,
+          x: explorationPlayer.x,
+          y: explorationPlayer.y,
+        },
+        character: explorationPlayer.character,
+        worldPlayers: getExplorationPlayersPayload(),
+        npcStates: getExplorationNpcStatesPayload(),
+        lockStatus: getExplorationLockStatusPayload(),
+        interruptedAction: explorationInterrupted,
+      } : null,
+      queue: matchmakingQueue[socketId]
+        ? {
+            inQueue: true,
+            players: Object.values(matchmakingQueue),
+          }
+        : null,
+    };
+  };
+
+  const migrateSocketState = (oldSocketId: string, newSocketId: string, socket: any) => {
+    if (matchmakingQueue[oldSocketId]) {
+      matchmakingQueue[newSocketId] = {
+        ...matchmakingQueue[oldSocketId],
+        id: newSocketId,
+      };
+      delete matchmakingQueue[oldSocketId];
+      socket.join("matchmaking_lobby");
+    }
+
+    if (players[oldSocketId]) {
+      players[newSocketId] = { ...players[oldSocketId] };
+      delete players[oldSocketId];
+    }
+
+    const roomId = players[newSocketId]?.room;
+    const room = roomId ? rooms[roomId] : null;
+    if (roomId && room?.players?.[oldSocketId]) {
+      room.players[newSocketId] = room.players[oldSocketId];
+      delete room.players[oldSocketId];
+
+      if (room.host === oldSocketId) {
+        room.host = newSocketId;
+      }
+
+      if (room.disconnectedParticipantIds instanceof Set) {
+        room.disconnectedParticipantIds.delete(oldSocketId);
+        if (room.disconnectedParticipantIds.size === 0) {
+          delete room.disconnectedParticipantIds;
+        }
+      }
+
+      if (room.pendingReadyPlayers instanceof Set && room.pendingReadyPlayers.has(oldSocketId)) {
+        room.pendingReadyPlayers.delete(oldSocketId);
+        room.pendingReadyPlayers.add(newSocketId);
+      }
+
+      if (room.mapState?.players) {
+        room.mapState.players = room.mapState.players.map((player: any) => (
+          player.id === oldSocketId ? { ...player, id: newSocketId } : player
+        ));
+      }
+
+      syncArenaPreparationTimerPlayerId(arenaPreparationTimers[roomId], oldSocketId, newSocketId);
+      syncArenaPreparationTimerPlayerId(room.pausedArenaPreparation, oldSocketId, newSocketId);
+      socket.join(roomId);
+    }
+
+    if (explorationPlayers[oldSocketId]) {
+      explorationPlayers[newSocketId] = {
+        ...explorationPlayers[oldSocketId],
+        socketId: newSocketId,
+      };
+      delete explorationPlayers[oldSocketId];
+      socket.join("exploration_world");
+    }
+
+    if (explorationLockedActions[oldSocketId]) {
+      explorationLockedActions[newSocketId] = explorationLockedActions[oldSocketId];
+      delete explorationLockedActions[oldSocketId];
+    }
+
+    if (activeExplorationRequests[oldSocketId]) {
+      delete activeExplorationRequests[oldSocketId];
+    }
+
+    for (const npc of Object.values(explorationNpcs)) {
+      if (npc.followTargetId === oldSocketId) {
+        npc.followTargetId = newSocketId;
+      }
+    }
+  };
+
+  const finalizeSocketDisconnect = (socketId: string, sessionId?: string) => {
+    clearTypingForSocket(socketId);
+
+    if (matchmakingQueue[socketId]) {
+      delete matchmakingQueue[socketId];
+      io.to("matchmaking_lobby").emit("queueUpdated", Object.values(matchmakingQueue));
+    }
+
+    if (explorationPlayers[socketId]) {
+      if (activeExplorationRequests[socketId]) {
+        activeExplorationRequests[socketId].abort();
+        delete activeExplorationRequests[socketId];
+      }
+      for (const npc of Object.values(explorationNpcs)) {
+        if (npc.followTargetId === socketId) {
+          setNpcFollowState(npc.id, null);
+        }
+      }
+      delete explorationLockedActions[socketId];
+      delete explorationPlayers[socketId];
+      emitExplorationPlayersUpdated();
+      emitExplorationNpcStatesUpdated();
+      emitExplorationLockStatuses();
+    }
+
+    const roomId = players[socketId]?.room;
+    if (roomId) {
+      const room = rooms[roomId];
+      clearRoomTimer(roomId);
+      clearArenaPreparationTimer(roomId);
+      if (room?.readyTimeout) {
+        clearTimeout(room.readyTimeout);
+        delete room.readyTimeout;
+      }
+      if (room) {
+        io.to(roomId).emit("opponentDisconnected", {
+          playerId: socketId,
+          playerName: room.players?.[socketId]?.character?.name || 'Opponent',
+        });
+        delete rooms[roomId];
+      }
+    }
+
+    delete players[socketId];
+    delete socketSessionIds[socketId];
+    if (sessionId && sessionSocketIds[sessionId] === socketId) {
+      delete sessionSocketIds[sessionId];
+    }
+  };
+
   io.on("connection", (socket) => {
-    console.log("User connected:", socket.id);
+    const requestedSessionId = typeof socket.handshake.auth?.sessionId === 'string' && socket.handshake.auth.sessionId.trim()
+      ? socket.handshake.auth.sessionId.trim()
+      : `anon_${socket.id}`;
+    socketSessionIds[socket.id] = requestedSessionId;
+    sessionSocketIds[requestedSessionId] = socket.id;
+
+    let reconnectContext = { explorationInterrupted: false };
+    const pendingDisconnect = pendingDisconnects[requestedSessionId];
+    if (pendingDisconnect?.socketId && pendingDisconnect.socketId !== socket.id) {
+      clearTimeout(pendingDisconnect.timer);
+      reconnectContext = { explorationInterrupted: pendingDisconnect.explorationInterrupted };
+      delete pendingDisconnects[requestedSessionId];
+
+      const oldSocketId = pendingDisconnect.socketId;
+      migrateSocketState(oldSocketId, socket.id, socket);
+
+      const roomId = players[socket.id]?.room;
+      const room = roomId ? rooms[roomId] : null;
+      if (roomId && room) {
+        emitRoomPlayersUpdated(roomId);
+        emitBattleMapState(roomId);
+        socket.to(roomId).emit("participantConnectionState", {
+          playerId: socket.id,
+          previousPlayerId: oldSocketId,
+          playerName: room.players?.[socket.id]?.character?.name || 'Opponent',
+          state: 'rejoined',
+        });
+        resumeRoomAfterReconnect(roomId);
+
+        const shouldReissueTurnResolution = room.phase === 'battle'
+          && room.host === socket.id
+          && (
+            room.awaitingTurnResolution
+            || Object.keys(room.players || {}).every((playerId) => !!room.players[playerId]?.lockedIn)
+          )
+          && !room.pendingReadyPlayers;
+        if (shouldReissueTurnResolution) {
+          delete room.lastResolutionRequestAt;
+          setTimeout(() => requestTurnResolutionIfReady(roomId), 250);
+        }
+      }
+
+      if (explorationPlayers[socket.id]) {
+        emitExplorationPlayersUpdated();
+        emitExplorationNpcStatesUpdated();
+        emitExplorationLockStatuses();
+      }
+
+      if (matchmakingQueue[socket.id]) {
+        io.to("matchmaking_lobby").emit("queueUpdated", Object.values(matchmakingQueue));
+      }
+    }
+
+    console.log("User connected:", socket.id, { sessionId: requestedSessionId });
+
+    socket.on("resumeSession", () => {
+      socket.emit("sessionResumed", buildSessionResumePayload(socket.id, reconnectContext.explorationInterrupted));
+      reconnectContext = { explorationInterrupted: false };
+    });
 
     socket.on("characterCreated", (state) => {
       const roomId = players[socket.id]?.room;
@@ -2039,8 +2425,10 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
             ? `is now ${nearestOpponentDistance} moves away from the opponent`
             : 'has an uncertain distance to the opponent';
 
+      const movementLog = `🗺️ **${moverName}** repositions to **${nextLocation.name}** and ${distanceLabel}.`;
+      appendRoomHistory(roomId, movementLog);
       io.to(roomId).emit('battleMapMovementLog', {
-        log: `🗺️ **${moverName}** repositions to **${nextLocation.name}** and ${distanceLabel}.`,
+        log: movementLog,
       });
       emitBattleMapState(roomId);
     });
@@ -2299,12 +2687,13 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         host: data.challengerId,
         isBotMatch: false,
         isPvpExploration: true,
+        phase: 'battle',
         battleTurnSeconds: TURN_TIMER_SECONDS,
         players: {
           [data.challengerId]: { lockedIn: false, action: "", character: challenger.character },
           [socket.id]: { lockedIn: false, action: "", character: accepter.character },
         },
-        history: [],
+        history: ['**Match Found!** The battle begins.'],
       };
 
       const challengerSocket = io.sockets.sockets.get(data.challengerId);
@@ -2423,6 +2812,56 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       players[socket.id].room = roomId;
 
       startArenaPreparation(roomId);
+    });
+
+    socket.on("attachNpcAlliesToBattle", (data: { npcIds?: string[] }) => {
+      const roomId = players[socket.id]?.room;
+      if (!roomId) return;
+
+      const room = rooms[roomId];
+      if (!room?.isBotMatch || room.host !== socket.id) return;
+
+      const requestedNpcIds = Array.isArray(data?.npcIds) ? data.npcIds : [];
+      let attachedAny = false;
+
+      for (const npcId of requestedNpcIds) {
+        const resolvedNpcByName = Object.values(worldData?.npcs || {}).find((npc: any) => npc?.name?.toLowerCase() === String(npcId || '').toLowerCase()) as any;
+        const canonicalNpcId = worldData?.npcs?.[npcId]?.id || resolvedNpcByName?.id;
+        if (!canonicalNpcId) continue;
+
+        const roomNpcId = `npc_ally_${canonicalNpcId}`;
+        if (room.players[roomNpcId]) continue;
+
+        const npcProfile: any = worldData?.npcs?.[canonicalNpcId];
+        if (!npcProfile) continue;
+
+        room.players[roomNpcId] = {
+          lockedIn: false,
+          action: "",
+          character: {
+            name: npcProfile.name,
+            hp: npcProfile.hp || 60,
+            maxHp: npcProfile.hp || 60,
+            mana: npcProfile.mana || 40,
+            maxMana: npcProfile.mana || 40,
+            profileMarkdown: npcProfile.profileMarkdown,
+            isNpcAlly: true,
+          },
+        };
+        room.npcAllyIds = Array.from(new Set([...(room.npcAllyIds || []), roomNpcId]));
+        attachedAny = true;
+      }
+
+      if (!attachedAny) return;
+
+      room.mapState = buildArenaBattleMapState(room.players);
+      console.log('[FollowerBattle][server] attached missing battle allies', {
+        roomId,
+        socketId: socket.id,
+        npcAllyIds: room.npcAllyIds,
+      });
+      emitRoomPlayersUpdated(roomId);
+      emitBattleMapState(roomId);
     });
 
     socket.on("enterArena", (data?: { unlimitedTurnTime?: boolean; arenaPreviewSeconds?: number; arenaTweakSeconds?: number; battleTurnSeconds?: number }) => {
@@ -2591,7 +3030,8 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       const room = rooms[roomId];
       if (!room || !room.isBotMatch) return;
 
-      const botId = `bot_${socket.id}`;
+      const botId = Object.keys(room.players).find(playerId => playerId.startsWith('bot_'));
+      if (!botId) return;
       applyPlayerLockedAction(roomId, botId, data.action);
     });
 
@@ -2672,6 +3112,8 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       if (!room) return;
 
       delete room.lastResolutionRequestAt;
+      room.awaitingTurnResolution = false;
+      delete room.activeBattleStream;
 
       const newState = data.state;
 
@@ -2713,6 +3155,14 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         room.players[pid].action = "";
       }
 
+      const historyEntries: string[] = [];
+      if (typeof data.thoughts === 'string' && data.thoughts.trim()) {
+        historyEntries.push(`> **Judge's Thoughts:**\n> ${data.thoughts.replace(/\n/g, '\n> ')}`);
+      }
+      if (typeof data.log === 'string' && data.log.trim()) {
+        historyEntries.push(data.log);
+      }
+
       io.to(room.id).emit("turnResolved", {
         log: data.log,
         thoughts: data.thoughts,
@@ -2724,6 +3174,12 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       // Start timer for next turn if game continues (more than 1 player alive)
       // Timer is deferred until players signal readyForNextTurn (after scene image generates)
       const alivePlayers = Object.values(room.players).filter((p: any) => p.character.hp > 0);
+      if (alivePlayers.length <= 1) {
+        const winner = alivePlayers[0] as any;
+        historyEntries.push(`**GAME OVER!** ${winner ? winner.character.name : 'No one'} is victorious!`);
+      }
+      appendRoomHistory(roomId, historyEntries);
+
       if (alivePlayers.length > 1) {
         room.pendingReadyPlayers = new Set(Object.keys(room.players).filter(pid => alivePlayers.some((a: any) => a === room.players[pid])));
         // Safety timeout: start timer after 30s even if no readyForNextTurn received
@@ -2740,6 +3196,10 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
     socket.on("streamTurnResolutionStart", () => {
       const roomId = players[socket.id]?.room;
       if (roomId) {
+        const room = rooms[roomId];
+        if (room) {
+          room.activeBattleStream = { thoughts: '', answer: '' };
+        }
         io.to(roomId).emit("streamTurnResolutionStart");
       }
     });
@@ -2747,6 +3207,19 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
     socket.on("streamTurnResolutionChunk", (data) => {
       const roomId = players[socket.id]?.room;
       if (roomId) {
+        const room = rooms[roomId];
+        if (room) {
+          if (!room.activeBattleStream) {
+            room.activeBattleStream = { thoughts: '', answer: '' };
+          }
+          const isRefresh = typeof data?.text === 'string' && data.text.startsWith('REFRESH:');
+          const text = isRefresh ? String(data.text).slice('REFRESH:'.length) : String(data?.text || '');
+          if (data?.type === 'thought') {
+            room.activeBattleStream.thoughts = isRefresh ? text : `${room.activeBattleStream.thoughts || ''}${text}`;
+          } else if (data?.type === 'answer') {
+            room.activeBattleStream.answer = isRefresh ? text : `${room.activeBattleStream.answer || ''}${text}`;
+          }
+        }
         io.to(roomId).emit("streamTurnResolutionChunk", data);
       }
     });
@@ -2760,39 +3233,60 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
 
     socket.on("disconnect", () => {
       console.log("User disconnected:", socket.id);
-      clearTypingForSocket(socket.id);
-      
-      if (matchmakingQueue[socket.id]) {
-        delete matchmakingQueue[socket.id];
-        io.to("matchmaking_lobby").emit("queueUpdated", Object.values(matchmakingQueue));
-      }
-
-      // Clean up exploration
-      if (explorationPlayers[socket.id]) {
-        // Abort any active AI request
-        if (activeExplorationRequests[socket.id]) {
-          activeExplorationRequests[socket.id].abort();
-          delete activeExplorationRequests[socket.id];
-        }
-        for (const npc of Object.values(explorationNpcs)) {
-          if (npc.followTargetId === socket.id) {
-            setNpcFollowState(npc.id, null);
-          }
-        }
-        delete explorationLockedActions[socket.id];
-        delete explorationPlayers[socket.id];
-        emitExplorationPlayersUpdated();
-        emitExplorationNpcStatesUpdated();
+      const sessionId = socketSessionIds[socket.id];
+      if (sessionId && sessionSocketIds[sessionId] === socket.id) {
+        delete sessionSocketIds[sessionId];
       }
 
       const roomId = players[socket.id]?.room;
-      if (roomId) {
-        clearRoomTimer(roomId);
-        clearArenaPreparationTimer(roomId);
-        socket.to(roomId).emit("opponentDisconnected");
-        delete rooms[roomId];
+      const room = roomId ? rooms[roomId] : null;
+      const queueState = !!matchmakingQueue[socket.id];
+      const hasExplorationState = !!explorationPlayers[socket.id];
+      const hasRoomState = !!room;
+      let explorationInterrupted = false;
+
+      if (activeExplorationRequests[socket.id]) {
+        activeExplorationRequests[socket.id].abort();
+        delete activeExplorationRequests[socket.id];
+        explorationInterrupted = true;
       }
-      delete players[socket.id];
+
+      if (roomId && room) {
+        if (!(room.disconnectedParticipantIds instanceof Set)) {
+          room.disconnectedParticipantIds = new Set<string>();
+        }
+        room.disconnectedParticipantIds.add(socket.id);
+        pauseRoomForReconnect(roomId);
+        socket.to(roomId).emit("participantConnectionState", {
+          playerId: socket.id,
+          playerName: room.players?.[socket.id]?.character?.name || 'Opponent',
+          state: 'reconnecting',
+          graceSeconds: Math.floor(SESSION_RECONNECT_GRACE_MS / 1000),
+        });
+      }
+
+      const shouldHoldForReconnect = !!sessionId && (queueState || hasExplorationState || hasRoomState);
+      if (!shouldHoldForReconnect) {
+        finalizeSocketDisconnect(socket.id, sessionId);
+        return;
+      }
+
+      if (pendingDisconnects[sessionId]) {
+        clearTimeout(pendingDisconnects[sessionId].timer);
+      }
+
+      pendingDisconnects[sessionId] = {
+        socketId: socket.id,
+        explorationInterrupted,
+        timer: setTimeout(() => {
+          const pending = pendingDisconnects[sessionId];
+          if (!pending || pending.socketId !== socket.id) {
+            return;
+          }
+          delete pendingDisconnects[sessionId];
+          finalizeSocketDisconnect(socket.id, sessionId);
+        }, SESSION_RECONNECT_GRACE_MS),
+      };
     });
   });
 
