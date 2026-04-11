@@ -64,6 +64,7 @@ This file summarizes the most recent implemented changes so test planning can ta
 60. Arena prep now starts the match immediately once every rewrite-capable participant is locked in, even if the room is still in preview.
 61. Bot prep saves and bot combat actions now route through the same shared prep-save and player-action helpers used by human PvP flows.
 62. Battle resolution now logs judge tool calls live and falls back to a submitted-actions summary when the model returns only thoughts plus a tool call.
+63. The current menu shell was preserved while character creation, battle, and exploration were compacted into denser hybrid surfaces drawn from the later simplification branch.
 
 Suggested high-priority test areas:
 
@@ -72,3 +73,4 @@ Suggested high-priority test areas:
 3. Bot prep typing and locked-in behavior during the tweak phase.
 4. Water movement, pursuit, and mid-route positioning visibility on the minimap.
 5. Cross-client target-button consistency after movement.
+6. Desktop and mobile readability of the compact battle and exploration controls.

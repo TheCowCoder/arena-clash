@@ -35,11 +35,12 @@ const socket: Socket = io(undefined, {
   reconnectionDelay: 1_000,
   reconnectionDelayMax: 5_000,
   reconnectionAttempts: Infinity,
-  closeOnBeforeunload: false,  // Keep connection across tab switches
+  closeOnBeforeunload: false,
 });
 
 type Tab = 'home' | 'profile' | 'social';
 type GameState = 'menu' | 'char_creation' | 'matchmaking' | 'arena_prep' | 'battle' | 'post_match' | 'exploration' | 'level_select';
+type ConnectionPhase = 'online' | 'reconnecting' | 'resyncing' | 'reconnected';
 
 interface Character {
   name: string;
@@ -204,6 +205,32 @@ const ensureBattleStreamPlaceholders = (logs: string[]): string[] => {
 const removeBattleStreamPlaceholders = (logs: string[]): string[] => (
   logs.filter(log => !log.startsWith(BATTLE_STREAM_THOUGHTS_PREFIX) && !log.startsWith(BATTLE_STREAM_ANSWER_PREFIX))
 );
+
+const buildCompactCharacterStatSheet = (character: Character | null) => {
+  if (!character) return null;
+
+  return {
+    name: character.name,
+    hp: character.hp,
+    maxHp: character.maxHp,
+    mana: character.mana,
+    maxMana: character.maxMana,
+    gold: character.gold,
+  };
+};
+
+const isScrollViewportNearBottom = (element: HTMLElement, threshold = 56) => {
+  const remaining = element.scrollHeight - element.scrollTop - element.clientHeight;
+  return remaining <= threshold;
+};
+
+const extractBattleTurnSummary = (log: string): string | null => {
+  const summaryMatch = log.match(/(?:^|\n)---\s*\n([\s\S]+)$/);
+  if (!summaryMatch) return null;
+
+  const summary = summaryMatch[1]?.trim();
+  return summary || null;
+};
 
 const ImageSequencePreview = ({ frames, fps = 60, alt }: { frames: string[]; fps?: number; alt: string }) => {
   const [frameIndex, setFrameIndex] = useState(0);
@@ -700,10 +727,18 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [isWaitingForChar, setIsWaitingForChar] = useState(false);
-  const [connectionPhase, setConnectionPhase] = useState<'online' | 'reconnecting' | 'reconnected'>('online');
+  const [connectionPhase, setConnectionPhase] = useState<ConnectionPhase>('online');
+  const connectionPhaseRef = useRef<ConnectionPhase>('online');
+  const [participantConnectionNotice, setParticipantConnectionNotice] = useState<{ text: string; tone: 'amber' | 'green' | 'blue' } | null>(null);
   const [charCreatorRetryAttempt, setCharCreatorRetryAttempt] = useState(0);
   const [charCreatorError, setCharCreatorError] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatScrollContainerRef = useRef<HTMLDivElement>(null);
+  const [charAutoScroll, setCharAutoScroll] = useState(true);
+  const initialConnectHandledRef = useRef(false);
+  const reconnectRecoveryRef = useRef(false);
+  const connectionPhaseTimeoutRef = useRef<number | null>(null);
+  const participantNoticeTimeoutRef = useRef<number | null>(null);
 
   // World & Exploration state
   const [worldData, setWorldData] = useState<any>(null);
@@ -728,6 +763,7 @@ export default function App() {
   const [explorationLockStatus, setExplorationLockStatus] = useState<{id: string; name: string; lockedIn: boolean}[]>([]);
   const [isExplorationLockedIn, setIsExplorationLockedIn] = useState(false);
   const [showGoalsModal, setShowGoalsModal] = useState(false);
+  const [showAllGoals, setShowAllGoals] = useState(false);
   const [showFullMap, setShowFullMap] = useState(false);
   const [mapZoom, setMapZoom] = useState(1);
   const [mapPan, setMapPan] = useState({ x: 0, y: 0 });
@@ -737,11 +773,14 @@ export default function App() {
   const [isGeneratingCharImage, setIsGeneratingCharImage] = useState(false);
   const [explorationCombatReturn, setExplorationCombatReturn] = useState(false);
   const explorationEndRef = useRef<HTMLDivElement>(null);
+  const explorationScrollContainerRef = useRef<HTMLDivElement>(null);
   const explorationInputRef = useRef<HTMLTextAreaElement>(null);
   const worldDataRef = useRef<any>(null);
   const activeExplorationStreamIdRef = useRef<string | null>(null);
   const [explorationRetryAttempt, setExplorationRetryAttempt] = useState(0);
   const [explorationError, setExplorationError] = useState<string | null>(null);
+  const [explorationAutoScroll, setExplorationAutoScroll] = useState(true);
+  const [showSurvivalDetails, setShowSurvivalDetails] = useState(false);
 
   const moveExplorationStateToLocation = useCallback((locationId: string, x: number, y: number) => {
     setExplorationState(prev => {
@@ -804,9 +843,13 @@ export default function App() {
   const [localRoomTypingIds, setLocalRoomTypingIds] = useState<string[]>([]);
   const typingStopTimeoutsRef = useRef<Record<string, number>>({});
   const battleEndRef = useRef<HTMLDivElement>(null);
+  const battleScrollContainerRef = useRef<HTMLDivElement>(null);
   const charInputRef = useRef<HTMLTextAreaElement>(null);
   const battleInputRef = useRef<HTMLTextAreaElement>(null);
   const handleGenerateBattleImageRef = useRef<(() => void) | null>(null);
+  const [battleAutoScroll, setBattleAutoScroll] = useState(true);
+  const [allyActedIds, setAllyActedIds] = useState<string[]>([]);
+  const [lastBattleTurnSummary, setLastBattleTurnSummary] = useState<string | null>(null);
 
   const [showBotModal, setShowBotModal] = useState(false);
   const [botDifficulty, setBotDifficulty] = useState<number>(1);
@@ -824,6 +867,9 @@ export default function App() {
   const isBotMatchRef = useRef(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [profileToView, setProfileToView] = useState<string | null>(null);
+  const [showBattleMeta, setShowBattleMeta] = useState(false);
+  const [showExplorationMeta, setShowExplorationMeta] = useState(false);
+  const [showExplorationNearby, setShowExplorationNearby] = useState(false);
   useEffect(() => { isBotMatchRef.current = isBotMatch; }, [isBotMatch]);
   const difficultyLabels = ['Easy', 'Medium', 'Hard', 'Superintelligent'];
   const avatarSyncKeysRef = useRef<Record<string, string>>({});
@@ -831,6 +877,10 @@ export default function App() {
   useEffect(() => {
     playersRef.current = players;
   }, [players]);
+
+  useEffect(() => {
+    connectionPhaseRef.current = connectionPhase;
+  }, [connectionPhase]);
 
   useEffect(() => {
     gameStateRef.current = gameState;
@@ -858,6 +908,86 @@ export default function App() {
       typing: typingSet.has(player.id),
     })));
   }, []);
+
+  const clearConnectionPhaseTimeout = useCallback(() => {
+    if (connectionPhaseTimeoutRef.current) {
+      window.clearTimeout(connectionPhaseTimeoutRef.current);
+      connectionPhaseTimeoutRef.current = null;
+    }
+  }, []);
+
+  const flashConnectionPhase = useCallback((phase: ConnectionPhase, duration = 2400) => {
+    clearConnectionPhaseTimeout();
+    setConnectionPhase(phase);
+    if (phase === 'online') return;
+    connectionPhaseTimeoutRef.current = window.setTimeout(() => {
+      setConnectionPhase('online');
+      connectionPhaseTimeoutRef.current = null;
+    }, duration);
+  }, [clearConnectionPhaseTimeout]);
+
+  const flashParticipantConnectionNotice = useCallback((text: string, tone: 'amber' | 'green' | 'blue', duration = 3200) => {
+    if (participantNoticeTimeoutRef.current) {
+      window.clearTimeout(participantNoticeTimeoutRef.current);
+      participantNoticeTimeoutRef.current = null;
+    }
+
+    setParticipantConnectionNotice({ text, tone });
+    if (duration <= 0) return;
+
+    participantNoticeTimeoutRef.current = window.setTimeout(() => {
+      setParticipantConnectionNotice(null);
+      participantNoticeTimeoutRef.current = null;
+    }, duration);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearConnectionPhaseTimeout();
+      if (participantNoticeTimeoutRef.current) {
+        window.clearTimeout(participantNoticeTimeoutRef.current);
+      }
+    };
+  }, [clearConnectionPhaseTimeout]);
+
+  const resumeChatAutoScroll = useCallback(() => {
+    setCharAutoScroll(true);
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
+
+  const resumeBattleAutoScroll = useCallback(() => {
+    setBattleAutoScroll(true);
+    battleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
+
+  const resumeExplorationAutoScroll = useCallback(() => {
+    setExplorationAutoScroll(true);
+    explorationEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
+
+  const handleChatLogScroll = useCallback(() => {
+    const container = chatScrollContainerRef.current;
+    if (!container || !charAutoScroll) return;
+    if (!isScrollViewportNearBottom(container)) {
+      setCharAutoScroll(false);
+    }
+  }, [charAutoScroll]);
+
+  const handleBattleLogScroll = useCallback(() => {
+    const container = battleScrollContainerRef.current;
+    if (!container || !battleAutoScroll) return;
+    if (!isScrollViewportNearBottom(container)) {
+      setBattleAutoScroll(false);
+    }
+  }, [battleAutoScroll]);
+
+  const handleExplorationLogScroll = useCallback(() => {
+    const container = explorationScrollContainerRef.current;
+    if (!container || !explorationAutoScroll) return;
+    if (!isScrollViewportNearBottom(container)) {
+      setExplorationAutoScroll(false);
+    }
+  }, [explorationAutoScroll]);
 
   const updateTypingPresence = useCallback((channel: 'character' | 'battle' | 'exploration', value: string) => {
     const timeoutId = typingStopTimeoutsRef.current[channel];
@@ -914,48 +1044,77 @@ export default function App() {
   }, [authToken]);
 
   useEffect(() => {
-    socket.on('characterSynced', () => setIsSynced(true));
-    socket.on('disconnect', (reason) => {
+    if (socket.connected && !initialConnectHandledRef.current) {
+      initialConnectHandledRef.current = true;
+    }
+
+    const handleCharacterSynced = () => setIsSynced(true);
+    const handleDisconnect = (reason: string) => {
       setIsSynced(false);
       if (reason === 'io server disconnect') {
+        reconnectRecoveryRef.current = false;
+        clearConnectionPhaseTimeout();
         setConnectionPhase('online');
-      } else if (reason === 'io client disconnect' || reason === 'transport error' || reason === 'ping timeout') {
-        setConnectionPhase('reconnecting');
+        return;
       }
-    });
-    
-    // Reconnection listeners on socket.io manager
-    socket.io.on('reconnect_attempt', () => {
+      reconnectRecoveryRef.current = initialConnectHandledRef.current;
+      clearConnectionPhaseTimeout();
       setConnectionPhase('reconnecting');
-    });
+    };
     
-    socket.io.on('reconnect_error', () => {
+    const handleReconnectAttempt = () => {
+      reconnectRecoveryRef.current = true;
+      clearConnectionPhaseTimeout();
       setConnectionPhase('reconnecting');
-    });
+    };
     
-    socket.io.on('reconnect_failed', () => {
-      setConnectionPhase('online');
-    });
+    const handleReconnectError = () => {
+      reconnectRecoveryRef.current = true;
+      clearConnectionPhaseTimeout();
+      setConnectionPhase('reconnecting');
+    };
     
-    // Listen for successful reconnection
-    socket.on('connect', () => {
+    const handleReconnectFailed = () => {
+      reconnectRecoveryRef.current = false;
+      clearConnectionPhaseTimeout();
       setConnectionPhase('online');
-      // Flash "reconnected" message briefly
-      if (!socket.recovered) {
-        setConnectionPhase('reconnected');
-        setTimeout(() => setConnectionPhase('online'), 2000);
+    };
+    
+    const handleConnect = () => {
+      if (!initialConnectHandledRef.current) {
+        initialConnectHandledRef.current = true;
+        clearConnectionPhaseTimeout();
+        setConnectionPhase('online');
+        return;
       }
-    });
+
+      clearConnectionPhaseTimeout();
+      if (reconnectRecoveryRef.current || !socket.recovered) {
+        setConnectionPhase('resyncing');
+        socket.emit('resumeSession');
+        return;
+      }
+
+      setConnectionPhase('online');
+    };
+
+    socket.on('characterSynced', handleCharacterSynced);
+    socket.on('disconnect', handleDisconnect);
+    socket.io.on('reconnect_attempt', handleReconnectAttempt);
+    socket.io.on('reconnect_error', handleReconnectError);
+    socket.io.on('reconnect_failed', handleReconnectFailed);
+    socket.on('connect', handleConnect);
     
     return () => {
-      socket.off('characterSynced');
-      socket.off('disconnect');
-      socket.off('connect');
-      socket.io.off('reconnect_attempt');
-      socket.io.off('reconnect_error');
-      socket.io.off('reconnect_failed');
+      clearConnectionPhaseTimeout();
+      socket.off('characterSynced', handleCharacterSynced);
+      socket.off('disconnect', handleDisconnect);
+      socket.off('connect', handleConnect);
+      socket.io.off('reconnect_attempt', handleReconnectAttempt);
+      socket.io.off('reconnect_error', handleReconnectError);
+      socket.io.off('reconnect_failed', handleReconnectFailed);
     };
-  }, []);
+  }, [clearConnectionPhaseTimeout]);
 
   useEffect(() => {
     const sync = () => {
@@ -1000,16 +1159,22 @@ export default function App() {
   }, [battleLogs]);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    if (charAutoScroll) {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [charAutoScroll, messages]);
 
   useEffect(() => {
-    battleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [battleLogs]);
+    if (battleAutoScroll) {
+      battleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [battleAutoScroll, battleLogs]);
 
   useEffect(() => {
-    explorationEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [explorationLog]);
+    if (explorationAutoScroll) {
+      explorationEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [explorationAutoScroll, explorationLog]);
 
   const roomIdRef = useRef(roomId);
   useEffect(() => { roomIdRef.current = roomId; }, [roomId]);
@@ -1313,6 +1478,122 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       setBattleLogs(prev => appendBattleLogIfMissing(prev, data.log));
     });
 
+    socket.on('participantConnectionState', (data: { playerName?: string; state: 'reconnecting' | 'rejoined'; graceSeconds?: number }) => {
+      if (data.state === 'reconnecting') {
+        const graceText = typeof data.graceSeconds === 'number' ? ` · holding ${data.graceSeconds}s` : '';
+        flashParticipantConnectionNotice(`${data.playerName || 'Opponent'} reconnecting${graceText}`, 'amber', 0);
+        return;
+      }
+
+      flashParticipantConnectionNotice(`${data.playerName || 'Opponent'} rejoined`, 'green');
+    });
+
+    socket.on('sessionResumed', (payload: any) => {
+      reconnectRecoveryRef.current = false;
+
+      const roomSnapshot = payload?.room;
+      const explorationSnapshot = payload?.exploration;
+      const queueSnapshot = payload?.queue;
+
+      if (roomSnapshot) {
+        const restoredHistory = Array.isArray(roomSnapshot.history) ? roomSnapshot.history.filter(Boolean) : [];
+        const restoredLogs = removeBattleStreamPlaceholders(restoredHistory);
+        const activeStream = roomSnapshot.activeBattleStream;
+
+        if (activeStream?.thoughts) {
+          restoredLogs.push(BATTLE_STREAM_THOUGHTS_PREFIX + activeStream.thoughts);
+        }
+        if (activeStream?.answer) {
+          restoredLogs.push(BATTLE_STREAM_ANSWER_PREFIX + activeStream.answer);
+        }
+
+        const lastNarrativeLog = [...restoredHistory].reverse().find((entry: string) => (
+          entry
+          && !entry.startsWith('STATUS_')
+          && !entry.startsWith('> **Judge')
+          && !entry.startsWith('NPC_ALLY_ACTION_')
+          && !entry.startsWith(BATTLE_PLAYER_ACTIONS_PREFIX)
+          && !entry.startsWith(BATTLE_PENDING_ACTION_PREFIX)
+        )) || null;
+
+        setRoomId(roomSnapshot.roomId);
+        setPlayers(roomSnapshot.players || {});
+        syncBattleMapState(roomSnapshot.mapState);
+        setArenaPreparation(roomSnapshot.arenaPreparation ?? null);
+        setBattleLogs(restoredLogs);
+        setBattleError(null);
+        setRetryAttempt(0);
+        setTurnTimerRemaining(roomSnapshot.turnTimerRemaining ?? null);
+        setIsBotMatch(!!roomSnapshot.isBotMatch);
+        setIsLockedIn(!!roomSnapshot.players?.[socket.id || '']?.lockedIn);
+        setRoomTypingIds([]);
+        setLocalRoomTypingIds([]);
+        setAllyActedIds([]);
+        setLastBattleTurnSummary(extractBattleTurnSummary(lastNarrativeLog || ''));
+        setHasVisualizedThisTurn(false);
+        setGameState(roomSnapshot.phase === 'arena_prep' ? 'arena_prep' : 'battle');
+
+        if (roomSnapshot.needsTurnResolution) {
+          clearConnectionPhaseTimeout();
+          setConnectionPhase('resyncing');
+          upsertBattleStatusLog('battle-resync', '⚠️ Resyncing turn state...');
+        } else {
+          clearBattleStatusLog('battle-resync');
+          flashConnectionPhase('reconnected');
+        }
+        return;
+      }
+
+      if (explorationSnapshot) {
+        const nextState = explorationSnapshot.state || {};
+        setRoomId(null);
+        setArenaPreparation(null);
+        syncBattleMapState(null);
+        setExplorationState(prev => ({
+          ...prev,
+          ...nextState,
+          discoveredLocations: Array.isArray(nextState.discoveredLocations) ? nextState.discoveredLocations : prev.discoveredLocations,
+          inventory: nextState.inventory ?? prev.inventory,
+          goals: Array.isArray(nextState.goals) ? nextState.goals : prev.goals,
+          equippedWeapon: nextState.equippedWeapon ?? prev.equippedWeapon,
+          equippedArmor: nextState.equippedArmor ?? prev.equippedArmor,
+        }));
+        if (explorationSnapshot.character) {
+          setCharacter(prev => prev
+            ? normalizeCharacter({ ...prev, ...explorationSnapshot.character })
+            : normalizeCharacter(explorationSnapshot.character)
+          );
+        }
+        mergeWorldPlayers(explorationSnapshot.worldPlayers || []);
+        setWorldNpcs(explorationSnapshot.npcStates || []);
+        setExplorationLockStatus(explorationSnapshot.lockStatus || []);
+        setIsExplorationLockedIn(false);
+        setIsExplorationProcessing(false);
+        setGameState('exploration');
+
+        if (explorationSnapshot.interruptedAction) {
+          setExplorationError('Connection recovered. Your last action was interrupted.');
+          upsertExplorationStatusMessage('exploration-retry', '⚠️ Connection recovered. Your last action was interrupted. Send it again if needed.');
+        } else {
+          clearExplorationStatusMessage('exploration-retry');
+          setExplorationError(null);
+        }
+
+        flashConnectionPhase('reconnected');
+        return;
+      }
+
+      if (queueSnapshot?.inQueue) {
+        setQueuePlayers(queueSnapshot.players || []);
+        setGameState('matchmaking');
+        flashConnectionPhase('reconnected');
+        return;
+      }
+
+      setGameState('menu');
+      flashConnectionPhase('reconnected');
+    });
+
     socket.on('typingStatusUpdated', (data: { context: 'room' | 'exploration'; typingIds: string[] }) => {
       if (data.context === 'room') {
         setRoomTypingIds(data.typingIds || []);
@@ -1323,6 +1604,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     });
 
     socket.on('battleActionsSubmitted', (data: { log: string }) => {
+      setAllyActedIds([]);
       setBattleLogs(prev => appendBattleLogIfMissing(removePendingBattleActionLogs(prev), data.log));
     });
 
@@ -1653,6 +1935,11 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
 
     socket.on('turnResolved', (data) => {
       setHasVisualizedThisTurn(false);
+      clearBattleStatusLog('battle-resync');
+      if (connectionPhaseRef.current === 'resyncing') {
+        flashConnectionPhase('reconnected');
+      }
+      setLastBattleTurnSummary(extractBattleTurnSummary(data.log || ''));
       setBattleLogs(prev => {
         const filtered = removePendingBattleActionLogs(removeBattleStreamPlaceholders(prev));
         const thoughts = data.thoughts || "";
@@ -1707,6 +1994,8 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       setRoomId(null);
       syncBattleMapState(null);
       setArenaPreparation(null);
+      setAllyActedIds([]);
+      setLastBattleTurnSummary(null);
       setRoomTypingIds([]);
       setLocalRoomTypingIds([]);
       setBattleInput('');
@@ -1778,6 +2067,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     });
 
     socket.on('npcAllyAction', (data: { npcId: string; npcName: string; action: string }) => {
+      setAllyActedIds(prev => prev.includes(data.npcId) ? prev : [...prev, data.npcId]);
       setBattleLogs(prev => [...prev, `NPC_ALLY_ACTION_**${data.npcName}:** ${data.action}`]);
     });
 
@@ -2096,6 +2386,8 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       socket.off('matchFound');
       socket.off('battleMapStateUpdated');
       socket.off('battleMapMovementLog');
+      socket.off('participantConnectionState');
+      socket.off('sessionResumed');
       socket.off('battleActionsSubmitted');
       socket.off('typingStatusUpdated');
       socket.off('playerLockedIn');
@@ -2278,7 +2570,12 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
 
     let fullSysPrompt = sysPrompt;
     if (character) {
-      fullSysPrompt += `\n\nExisting Character Profile (The user is tweaking this):\n${JSON.stringify(character)}\n\nIMPORTANT: The user is TWEAKING an existing character. Ask clarifying questions about what they want to change before outputting a new state. Do NOT jump straight to creating — iterate with the user. When you do save the character, this is an UPDATE, not a creation.`;
+      const compactCharacterState = buildCompactCharacterStatSheet(character);
+      const rosterProfiles = characters
+        .map(entry => `# ${entry.name}\n${entry.profileMarkdown}`)
+        .join('\n\n');
+
+      fullSysPrompt += `\n\nCompact Character Stat Sheet (machine-readable):\n${JSON.stringify(compactCharacterState)}\n\nExisting Character Profile JSON:\n${JSON.stringify(stripCharacterImageForSync(character))}\n\nExisting Character Markdown (canonical identity details, unusual resources, abilities, and constraints live here):\n${character.profileMarkdown}\n\nAll Saved Character Markdown Profiles:\n${rosterProfiles || 'None'}\n\nIMPORTANT: The user is TWEAKING an existing character. Use the markdown as canonical context, especially for nonstandard resources or unusual mechanics. Ask clarifying questions about what they want to change before outputting a new state. Do NOT jump straight to creating. When you do save the character, this is an UPDATE, not a creation.`;
     }
 
     // Function declaration for native tool calling
@@ -2778,6 +3075,12 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     if (battleInputRef.current) battleInputRef.current.style.height = 'auto';
   };
 
+  const getBattleSendBlockReason = () => {
+    if (!battleInput.trim()) return 'Action required';
+    if (isLockedIn) return 'Locked';
+    return null;
+  };
+
   const getThoughtTitle = (content: string) => {
     const lines = content.split('\n').filter(l => l.trim());
     // Look for the last header-like line
@@ -2814,6 +3117,14 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       charName = character.name;
     }
 
+    const selfConnectionNotice = connectionPhase === 'reconnecting'
+      ? { text: '🔄 Reconnecting...', tone: 'amber' as const }
+      : connectionPhase === 'resyncing'
+        ? { text: '🧭 Resyncing turn...', tone: 'blue' as const }
+        : connectionPhase === 'reconnected'
+          ? { text: '✓ Reconnected!', tone: 'green' as const }
+          : null;
+
     return (
       <div className="sticky top-0 z-20 bg-white border-b-2 border-duo-gray shadow-sm">
         <div className="px-4 py-3 flex items-center justify-between">
@@ -2847,13 +3158,18 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
             </button>
           </div>
         </div>
-        {connectionPhase !== 'online' && (
-          <div className={`px-4 py-1.5 text-[10px] font-black uppercase border-t text-center transition-colors ${
-            connectionPhase === 'reconnecting' 
-              ? 'bg-amber-50 text-amber-700 border-amber-200' 
-              : 'bg-green-50 text-green-700 border-green-200'
-          }`}>
-            {connectionPhase === 'reconnecting' ? '🔄 Reconnecting...' : '✓ Reconnected!'}
+        {(selfConnectionNotice || participantConnectionNotice) && (
+          <div className="px-2 py-1.5 border-t flex flex-wrap items-center justify-center gap-1.5 bg-gray-50/70">
+            {selfConnectionNotice && (
+              <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full border ${selfConnectionNotice.tone === 'amber' ? 'bg-amber-50 text-amber-700 border-amber-200' : selfConnectionNotice.tone === 'blue' ? 'bg-blue-50 text-duo-blue border-blue-200' : 'bg-green-50 text-green-700 border-green-200'}`}>
+                {selfConnectionNotice.text}
+              </span>
+            )}
+            {participantConnectionNotice && (
+              <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full border ${participantConnectionNotice.tone === 'amber' ? 'bg-amber-50 text-amber-700 border-amber-200' : participantConnectionNotice.tone === 'blue' ? 'bg-blue-50 text-duo-blue border-blue-200' : 'bg-green-50 text-green-700 border-green-200'}`}>
+                {participantConnectionNotice.text}
+              </span>
+            )}
           </div>
         )}
         {gameState === 'battle' && (
@@ -3187,59 +3503,69 @@ Be creative and concise.`;
 
   const renderCharCreation = () => (
     <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
-      <div className="p-4 bg-white border-b-2 border-duo-gray flex justify-between items-center">
+      <div className="p-3 bg-white border-b border-duo-gray flex justify-between items-center gap-3">
         <button 
           onClick={() => setGameState('menu')}
-          className="text-duo-gray-dark hover:text-duo-text flex items-center gap-1 font-bold"
+          className="text-duo-gray-dark hover:text-duo-text flex items-center gap-1 font-bold text-sm"
         >
           <ArrowLeft className="w-5 h-5" /> Back
         </button>
-        <h2 className="text-lg font-black text-duo-text">Character Architect</h2>
+        <h2 className="text-base font-black text-duo-text truncate">Legend Architect</h2>
         {character ? (
           <button 
             onClick={() => {
               setProfileToView(character.profileMarkdown);
               setShowProfileModal(true);
             }}
-            className="text-duo-blue hover:text-duo-blue-dark flex items-center gap-1 font-bold text-sm"
+            className="text-duo-blue hover:text-duo-blue-dark flex items-center gap-1 font-bold text-xs whitespace-nowrap"
           >
             <Info className="w-4 h-4" /> Profile
           </button>
-        ) : <div className="w-16" />}
+        ) : <div className="w-12" />}
       </div>
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.map((msg, i) => {
-          if (!msg.text && msg.role === 'model') return null;
-          return (
-            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              {msg.role === 'system' ? (
-                <div className="w-full">
-                  <div className="text-center text-sm font-bold text-red-500 bg-red-50 border border-red-100 rounded-lg py-2 px-4 my-2 markdown-body">
-                    <Markdown rehypePlugins={[rehypeRaw]}>{msg.text}</Markdown>
+      <div className="flex-1 relative min-h-0">
+        <div ref={chatScrollContainerRef} onScroll={handleChatLogScroll} className="h-full overflow-y-auto p-3 space-y-3">
+          {messages.map((msg, i) => {
+            if (!msg.text && msg.role === 'model') return null;
+            return (
+              <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                {msg.role === 'system' ? (
+                  <div className="w-full">
+                    <div className="text-center text-sm font-bold text-red-500 bg-red-50 border border-red-100 rounded-lg py-2 px-4 my-2 markdown-body">
+                      <Markdown rehypePlugins={[rehypeRaw]}>{msg.text}</Markdown>
+                    </div>
+                    <InlineMessageMedia message={msg} alt="Portrait generation" />
                   </div>
-                  <InlineMessageMedia message={msg} alt="Portrait generation" />
-                </div>
-              ) : (
-                <div className={msg.role === 'user' ? 'chat-bubble-me' : 'chat-bubble-them'}>
-                  <div className="markdown-body">
-                    <Markdown rehypePlugins={[rehypeRaw]}>{msg.text}</Markdown>
+                ) : (
+                  <div className={msg.role === 'user' ? 'chat-bubble-me' : 'chat-bubble-them'}>
+                    <div className="markdown-body">
+                      <Markdown rehypePlugins={[rehypeRaw]}>{msg.text}</Markdown>
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
+            );
+          })}
+          {isWaitingForChar && (messages.length === 0 || messages[messages.length - 1].role === 'user' || !messages[messages.length - 1].text) && (
+            <div className="flex justify-start">
+              <div className="chat-bubble-them flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span className="font-bold text-sm">Thinking...</span>
+              </div>
             </div>
-          );
-        })}
-        {isWaitingForChar && (messages.length === 0 || messages[messages.length - 1].role === 'user' || !messages[messages.length - 1].text) && (
-          <div className="flex justify-start">
-            <div className="chat-bubble-them flex items-center gap-2">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              <span className="font-bold text-sm">Thinking...</span>
-            </div>
-          </div>
+          )}
+          <div ref={chatEndRef} />
+        </div>
+        {!charAutoScroll && (
+          <button
+            onClick={resumeChatAutoScroll}
+            className="absolute bottom-3 right-3 rounded-full bg-duo-blue text-white px-3 py-1.5 text-[10px] font-black uppercase shadow-lg"
+          >
+            Jump to latest
+          </button>
         )}
-        <div ref={chatEndRef} />
       </div>
-      <div className="p-4 bg-white border-t-2 border-duo-gray flex gap-2">
+      <div className="p-2.5 bg-white border-t border-duo-gray flex gap-2 composer-safe">
         <textarea
           ref={charInputRef}
           value={inputText}
@@ -3255,15 +3581,15 @@ Be creative and concise.`;
               handleSendCharMessage();
             }
           }}
-          placeholder="Type your response..."
-          className="flex-1 bg-duo-gray rounded-2xl px-4 py-3 font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue resize-none overflow-y-auto"
+          placeholder="Describe your legend..."
+          className="flex-1 bg-duo-gray rounded-2xl px-4 py-3 font-bold text-sm text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue resize-none overflow-y-auto"
           rows={1}
-          style={{ minHeight: '48px', maxHeight: '50vh' }}
+          style={{ minHeight: '44px', maxHeight: '50vh' }}
         />
         <button 
           onClick={handleSendCharMessage}
           disabled={isWaitingForChar || !inputText.trim()}
-          className="duo-btn duo-btn-blue px-6 flex items-center justify-center disabled:opacity-50"
+          className="duo-btn duo-btn-blue px-5 flex items-center justify-center disabled:opacity-50"
         >
           <Send className="w-5 h-5" />
         </button>
@@ -3421,39 +3747,49 @@ Be creative and concise.`;
           </div>
         ) : (
           <>
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              {messages.map((msg, i) => {
-                if (!msg.text && msg.role === 'model') return null;
-                return (
-                  <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    {msg.role === 'system' ? (
-                      <div className="w-full">
-                        <div className="text-center text-sm font-bold text-red-500 bg-red-50 border border-red-100 rounded-lg py-2 px-4 my-2 markdown-body">
-                          <Markdown rehypePlugins={[rehypeRaw]}>{msg.text}</Markdown>
+            <div className="flex-1 relative min-h-0">
+              <div ref={chatScrollContainerRef} onScroll={handleChatLogScroll} className="h-full overflow-y-auto p-4 space-y-4">
+                {messages.map((msg, i) => {
+                  if (!msg.text && msg.role === 'model') return null;
+                  return (
+                    <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      {msg.role === 'system' ? (
+                        <div className="w-full">
+                          <div className="text-center text-sm font-bold text-red-500 bg-red-50 border border-red-100 rounded-lg py-2 px-4 my-2 markdown-body">
+                            <Markdown rehypePlugins={[rehypeRaw]}>{msg.text}</Markdown>
+                          </div>
+                          <InlineMessageMedia message={msg} alt="Portrait generation" />
                         </div>
-                        <InlineMessageMedia message={msg} alt="Portrait generation" />
-                      </div>
-                    ) : (
-                      <div className={msg.role === 'user' ? 'chat-bubble-me' : 'chat-bubble-them'}>
-                        <div className="markdown-body">
-                          <Markdown rehypePlugins={[rehypeRaw]}>{msg.text}</Markdown>
+                      ) : (
+                        <div className={msg.role === 'user' ? 'chat-bubble-me' : 'chat-bubble-them'}>
+                          <div className="markdown-body">
+                            <Markdown rehypePlugins={[rehypeRaw]}>{msg.text}</Markdown>
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
+                  );
+                })}
+                {isWaitingForChar && (messages.length === 0 || messages[messages.length - 1].role === 'user' || !messages[messages.length - 1].text) && (
+                  <div className="flex justify-start">
+                    <div className="chat-bubble-them flex items-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span className="font-bold text-sm">Rewriting your legend...</span>
+                    </div>
                   </div>
-                );
-              })}
-              {isWaitingForChar && (messages.length === 0 || messages[messages.length - 1].role === 'user' || !messages[messages.length - 1].text) && (
-                <div className="flex justify-start">
-                  <div className="chat-bubble-them flex items-center gap-2">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span className="font-bold text-sm">Rewriting your legend...</span>
-                  </div>
-                </div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+              {!charAutoScroll && (
+                <button
+                  onClick={resumeChatAutoScroll}
+                  className="absolute bottom-3 right-3 rounded-full bg-duo-blue text-white px-3 py-1.5 text-[10px] font-black uppercase shadow-lg"
+                >
+                  Jump to latest
+                </button>
               )}
-              <div ref={chatEndRef} />
             </div>
-            <div className="p-4 bg-white border-t-2 border-duo-gray flex gap-2">
+            <div className="p-4 bg-white border-t-2 border-duo-gray flex gap-2 composer-safe">
               <textarea
                 ref={charInputRef}
                 value={inputText}
@@ -3505,29 +3841,130 @@ Be creative and concise.`;
     const battleConnectedLocations = (currentBattleLocation?.connections || [])
       .map((locationId: string) => getWorldLocationById(worldData, locationId))
       .filter(Boolean) as WorldLocation[];
+    const battleTitle = explorationCombatReturn && getCurrentLocation()?.name ? `⚔️ ${getCurrentLocation()?.name}` : 'Arena';
+    const primaryCombatants = Object.entries(players).filter(([, player]) => !player.character?.isNpcAlly);
+    const followerPlayers = Object.entries(players).filter(([, player]) => !!player.character?.isNpcAlly);
+    const combatantCount = primaryCombatants.length;
+    const lockedCount = primaryCombatants.filter(([, player]) => player.lockedIn).length;
+    const battleSendBlockReason = getBattleSendBlockReason();
 
     return (
       <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          <div className="flex items-start justify-between gap-3 mb-2">
-            <h1 className="text-2xl font-black text-duo-text">{explorationCombatReturn && getCurrentLocation()?.name ? `⚔️ ${getCurrentLocation()?.name}` : 'The Battle'}</h1>
+        <div className="p-2 bg-white border-b border-duo-gray flex items-center justify-between gap-2">
+          <div className="min-w-0 flex items-center gap-2">
+            <h1 className="font-black text-sm text-duo-text truncate">{battleTitle}</h1>
+            {turnTimerRemaining != null && (
+              <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border whitespace-nowrap ${turnTimerRemaining <= 10 ? 'bg-red-100 text-red-700 border-red-200 animate-pulse' : turnTimerRemaining <= 20 ? 'bg-orange-100 text-orange-700 border-orange-200' : 'bg-blue-100 text-blue-700 border-blue-200'}`}>
+                ⏱️ {turnTimerRemaining}s
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowBattleMeta(prev => !prev)}
+              className="rounded-full bg-duo-gray/70 p-1.5 text-duo-gray-dark hover:text-duo-text"
+              aria-label={showBattleMeta ? 'Hide battle details' : 'Show battle details'}
+            >
+              {showBattleMeta ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            </button>
             {renderMinimap()}
           </div>
-          {battleConnectedLocations.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mb-3">
-              {battleConnectedLocations.map(location => (
-                <button
-                  key={location.id}
-                  onClick={() => handleBattleMapMove(location.id)}
-                  disabled={isLockedIn}
-                  className="text-[10px] font-bold bg-duo-blue/10 text-duo-blue border border-duo-blue/20 rounded-lg px-2 py-1 hover:bg-duo-blue/20 transition-colors disabled:opacity-50"
-                >
-                  ↔ {location.name}
-                </button>
-              ))}
-            </div>
+        </div>
+
+        <div className="px-2 py-1.5 bg-white border-b border-duo-gray flex flex-wrap items-center gap-1.5">
+          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-yellow-50 text-yellow-700 border border-yellow-200">
+            {lockedCount}/{combatantCount} locked
+          </span>
+          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-blue-50 text-duo-blue border border-blue-200">
+            {battleConnectedLocations.length} routes
+          </span>
+          {battleError && (
+            <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-red-50 text-red-600 border border-red-200">
+              Judge issue
+            </span>
           )}
-          {battleLogs.map((log, i) => {
+        </div>
+
+        {(followerPlayers.length > 0 || lastBattleTurnSummary) && (
+          <div className="px-2 py-2 bg-white border-b border-duo-gray space-y-2">
+            {followerPlayers.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[10px] font-black uppercase text-duo-gray-dark">Followers</span>
+                {followerPlayers.map(([id, player]) => {
+                  const isTyping = roomTypingIds.includes(id) || localRoomTypingIds.includes(id);
+                  const status = allyActedIds.includes(id)
+                    ? { label: 'Acted', className: 'bg-green-100 text-green-700 border-green-200' }
+                    : isTyping
+                      ? { label: 'Typing', className: 'bg-blue-50 text-duo-blue border-blue-200' }
+                      : player.lockedIn
+                        ? { label: 'Locked', className: 'bg-yellow-50 text-yellow-700 border-yellow-200' }
+                        : { label: 'Ready', className: 'bg-gray-100 text-duo-gray-dark border-gray-200' };
+
+                  return (
+                    <span key={id} className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${status.className}`}>
+                      {player.character.name}: {status.label}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+            {lastBattleTurnSummary && (
+              <div className="rounded-2xl border border-duo-gray bg-gray-50 px-3 py-2">
+                <div className="text-[10px] font-black uppercase text-duo-gray-dark mb-1">Turn Summary</div>
+                <div className="markdown-body text-sm">
+                  <Markdown rehypePlugins={[rehypeRaw]}>{lastBattleTurnSummary}</Markdown>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {showBattleMeta && (
+          <div className="px-2 py-2 bg-white border-b border-duo-gray space-y-2">
+            {battleConnectedLocations.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {battleConnectedLocations.map(location => (
+                  <button
+                    key={location.id}
+                    onClick={() => handleBattleMapMove(location.id)}
+                    disabled={isLockedIn}
+                    className="text-[10px] font-bold bg-duo-blue/10 text-duo-blue border border-duo-blue/20 rounded-lg px-2 py-1 hover:bg-duo-blue/20 transition-colors disabled:opacity-50"
+                  >
+                    ↔ {location.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-black text-yellow-700 uppercase">Turn</span>
+              {Object.keys(players).map(id => {
+                const player = players[id];
+                const isMe = id === socket.id;
+                const isLocked = player.lockedIn;
+                const isTyping = !isLocked && id !== socket.id && (roomTypingIds.includes(id) || localRoomTypingIds.includes(id));
+                return (
+                  <span key={id} className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${isLocked ? 'bg-green-100 text-green-700 border-green-200' : 'bg-gray-100 text-gray-500 border-gray-200'}`}>
+                    {isLocked ? '🔒' : isTyping ? <TypingDots className="mx-0.5 align-middle" dotClassName="h-1.5 w-1.5" /> : '⏳'} {isMe ? 'You' : player.character.name}
+                  </span>
+                );
+              })}
+            </div>
+            {Object.keys(explorationState.inventory).length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                <span className="text-[9px] font-black text-duo-gray-dark">🎒</span>
+                {Object.entries(explorationState.inventory).map(([item, qty]) => (
+                  <span key={item} className="text-[9px] font-bold bg-duo-gray rounded-full px-1.5 py-0.5 text-duo-gray-dark">
+                    {item}({qty})
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex-1 relative min-h-0">
+          <div ref={battleScrollContainerRef} onScroll={handleBattleLogScroll} className="h-full overflow-y-auto p-3 space-y-3">
+            {battleLogs.map((log, i) => {
             const isStreamingThoughts = log.startsWith(BATTLE_STREAM_THOUGHTS_PREFIX);
             const isStreamingAnswer = log.startsWith(BATTLE_STREAM_ANSWER_PREFIX);
             const isThoughts = log.startsWith("> **Judge's Thoughts:**") || isStreamingThoughts;
@@ -3677,38 +4114,23 @@ Be creative and concise.`;
                 </div>
               </div>
             );
-          })}
-          <div ref={battleEndRef} />
-        </div>
-
-        <div className="px-3 py-1.5 bg-yellow-50 border-t-2 border-yellow-200 flex flex-wrap items-center justify-center gap-2">
-          {turnTimerRemaining != null && (
-            <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${turnTimerRemaining <= 10 ? 'bg-red-100 text-red-700 border-red-200 animate-pulse' : turnTimerRemaining <= 20 ? 'bg-orange-100 text-orange-700 border-orange-200' : 'bg-blue-100 text-blue-700 border-blue-200'}`}>
-              ⏱️ {turnTimerRemaining}s
-            </span>
+            })}
+            <div ref={battleEndRef} />
+          </div>
+          {!battleAutoScroll && (
+            <button
+              onClick={resumeBattleAutoScroll}
+              className="absolute bottom-3 right-3 rounded-full bg-duo-blue text-white px-3 py-1.5 text-[10px] font-black uppercase shadow-lg"
+            >
+              Jump to latest
+            </button>
           )}
-          <span className="text-[10px] font-black text-yellow-700 uppercase">Turn Status:</span>
-          {Object.keys(players).map(id => {
-            const p = players[id];
-            const isMe = id === socket.id;
-            const isLocked = p.lockedIn;
-            const isTyping = !isLocked && id !== socket.id && (roomTypingIds.includes(id) || localRoomTypingIds.includes(id));
-            return (
-              <span key={id} className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${isLocked ? 'bg-green-100 text-green-700 border-green-200' : 'bg-gray-100 text-gray-500 border-gray-200'}`}>
-                {isLocked ? '🔒' : isTyping ? <TypingDots className="mx-0.5 align-middle" dotClassName="h-1.5 w-1.5" /> : '⏳'} {isMe ? 'You' : p.character.name}
-              </span>
-            );
-          })}
         </div>
 
-        <div className="p-3 bg-white border-t-2 border-duo-gray">
-          {/* Compact inventory in battle */}
-          {Object.keys(explorationState.inventory).length > 0 && (
-            <div className="flex flex-wrap gap-1 mb-2">
-              <span className="text-[9px] font-black text-duo-gray-dark">🎒</span>
-              {Object.entries(explorationState.inventory).map(([item, qty]) => (
-                <span key={item} className="text-[9px] font-bold bg-duo-gray rounded-full px-1.5 py-0.5 text-duo-gray-dark">{item}({qty})</span>
-              ))}
+        <div className="p-2 bg-white border-t border-duo-gray space-y-1.5 composer-safe">
+          {battleSendBlockReason && battleInput.trim() && (
+            <div className="text-[10px] font-black text-duo-gray-dark uppercase px-1">
+              {battleSendBlockReason}
             </div>
           )}
           <div className="flex gap-2">
@@ -3727,7 +4149,7 @@ Be creative and concise.`;
                 handleSendBattleAction();
               }
             }}
-            placeholder={isLockedIn ? "Waiting for opponent..." : "Describe your action..."}
+            placeholder={isLockedIn ? "Action locked..." : "Your move?"}
             className="flex-1 bg-duo-gray rounded-2xl px-3 py-2 text-sm font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue resize-none overflow-y-auto"
             rows={1}
             style={{ minHeight: '40px', maxHeight: '50vh' }}
@@ -3743,7 +4165,7 @@ Be creative and concise.`;
           ) : (
             <button 
               onClick={handleSendBattleAction}
-              disabled={isLockedIn || !battleInput.trim()}
+              disabled={!!battleSendBlockReason}
               className="duo-btn duo-btn-blue px-4 flex items-center justify-center disabled:opacity-50"
             >
               <Send className="w-4 h-4" />
@@ -4154,85 +4576,150 @@ Be creative and concise.`;
     );
   };
 
-  const renderSurvivalBars = () => (
-    <div className="flex gap-2 px-3 py-1.5 bg-gray-50 border-b border-duo-gray">
-      <div className="flex-1 space-y-0.5">
-        <div className="flex items-center gap-1 text-[9px] font-bold text-duo-gray-dark">
-          <Beef className="w-3 h-3" /> {explorationState.hunger}
+  const renderSurvivalBars = () => {
+    const survivalNeedsAttention = explorationState.hunger < 75 || explorationState.thirst < 75 || explorationState.stamina < 75;
+    const shouldExpand = showSurvivalDetails || survivalNeedsAttention;
+
+    if (!shouldExpand) {
+      return (
+        <button
+          onClick={() => setShowSurvivalDetails(true)}
+          className="w-full flex items-center justify-between gap-3 px-3 py-1.5 bg-gray-50 border-b border-duo-gray text-left"
+        >
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] font-black uppercase text-duo-gray-dark">Survival Stable</span>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white border border-duo-gray text-duo-gray-dark">🍖 {explorationState.hunger}</span>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white border border-duo-gray text-duo-gray-dark">💧 {explorationState.thirst}</span>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white border border-duo-gray text-duo-gray-dark">⚡ {explorationState.stamina}</span>
+          </div>
+          <ChevronDown className="w-4 h-4 text-duo-gray-dark" />
+        </button>
+      );
+    }
+
+    return (
+      <div className="bg-gray-50 border-b border-duo-gray">
+        <div className="flex items-center justify-between px-3 pt-1.5">
+          <span className="text-[10px] font-black uppercase text-duo-gray-dark">Survival</span>
+          {survivalNeedsAttention ? (
+            <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-red-50 text-red-600 border border-red-200">
+              Needs attention
+            </span>
+          ) : (
+            <button onClick={() => setShowSurvivalDetails(false)} className="text-duo-gray-dark hover:text-duo-text">
+              <ChevronUp className="w-4 h-4" />
+            </button>
+          )}
         </div>
-        <div className="h-1.5 bg-duo-gray rounded-full overflow-hidden">
-          <div className="h-full bg-orange-400 transition-all duration-500" style={{ width: `${explorationState.hunger}%` }} />
+        <div className="flex gap-2 px-3 py-1.5">
+          <div className="flex-1 space-y-0.5">
+            <div className="flex items-center gap-1 text-[9px] font-bold text-duo-gray-dark">
+              <Beef className="w-3 h-3" /> {explorationState.hunger}
+            </div>
+            <div className="h-1.5 bg-duo-gray rounded-full overflow-hidden">
+              <div className="h-full bg-orange-400 transition-all duration-500" style={{ width: `${explorationState.hunger}%` }} />
+            </div>
+          </div>
+          <div className="flex-1 space-y-0.5">
+            <div className="flex items-center gap-1 text-[9px] font-bold text-duo-gray-dark">
+              <GlassWater className="w-3 h-3" /> {explorationState.thirst}
+            </div>
+            <div className="h-1.5 bg-duo-gray rounded-full overflow-hidden">
+              <div className="h-full bg-blue-400 transition-all duration-500" style={{ width: `${explorationState.thirst}%` }} />
+            </div>
+          </div>
+          <div className="flex-1 space-y-0.5">
+            <div className="flex items-center gap-1 text-[9px] font-bold text-duo-gray-dark">
+              <Zap className="w-3 h-3" /> {explorationState.stamina}
+            </div>
+            <div className="h-1.5 bg-duo-gray rounded-full overflow-hidden">
+              <div className="h-full bg-yellow-400 transition-all duration-500" style={{ width: `${explorationState.stamina}%` }} />
+            </div>
+          </div>
         </div>
       </div>
-      <div className="flex-1 space-y-0.5">
-        <div className="flex items-center gap-1 text-[9px] font-bold text-duo-gray-dark">
-          <GlassWater className="w-3 h-3" /> {explorationState.thirst}
-        </div>
-        <div className="h-1.5 bg-duo-gray rounded-full overflow-hidden">
-          <div className="h-full bg-blue-400 transition-all duration-500" style={{ width: `${explorationState.thirst}%` }} />
-        </div>
-      </div>
-      <div className="flex-1 space-y-0.5">
-        <div className="flex items-center gap-1 text-[9px] font-bold text-duo-gray-dark">
-          <Zap className="w-3 h-3" /> {explorationState.stamina}
-        </div>
-        <div className="h-1.5 bg-duo-gray rounded-full overflow-hidden">
-          <div className="h-full bg-yellow-400 transition-all duration-500" style={{ width: `${explorationState.stamina}%` }} />
-        </div>
-      </div>
-    </div>
-  );
+    );
+  };
 
   const renderExploration = () => {
     const currentLoc = getCurrentLocation();
     const connected = getConnectedLocations();
     const activeExplorationThoughtId = activeExplorationStreamIdRef.current;
     const explorationEntries = explorationLog.filter(msg => msg.text.trim() !== '' || (msg.kind === 'thought' && msg.streamId === activeExplorationThoughtId));
+    const nearbyPlayers = worldPlayers.filter(player => player.id !== socket.id && player.locationId === explorationState.locationId);
+    const nearbyNpcs = worldNpcs.filter(npc => npc.locationId === explorationState.locationId);
+    const activeFollowers = worldNpcs.filter(npc => npc.followTargetId === socket.id);
+    const activeGoal = explorationState.goals[0] || 'No goals';
 
     return (
       <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
-        {/* Exploration header with minimap */}
-        <div className="p-3 bg-white border-b-2 border-duo-gray flex items-start justify-between gap-3">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <button onClick={() => { setGameState('menu'); socket.emit('leaveExploration'); }} className="text-duo-gray-dark hover:text-duo-text">
-                <ArrowLeft className="w-5 h-5" />
-              </button>
-              <h2 className="text-sm font-black text-duo-text truncate">🗺️ {currentLoc?.name || 'Loading...'}</h2>
+        <div className="p-2 bg-white border-b border-duo-gray space-y-2">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <button onClick={() => { setGameState('menu'); socket.emit('leaveExploration'); }} className="text-duo-gray-dark hover:text-duo-text">
+                  <ArrowLeft className="w-5 h-5" />
+                </button>
+                <h2 className="text-sm font-black text-duo-text truncate">🗺️ {currentLoc?.name || 'Loading...'}</h2>
+              </div>
+              <div className="mt-1.5 flex gap-1 flex-wrap">
+                <button 
+                  onClick={() => {
+                    setShowAllGoals(false);
+                    setShowGoalsModal(true);
+                  }}
+                  className="flex items-center gap-1 bg-yellow-100 border border-yellow-300 rounded-full px-2 py-0.5 text-[9px] font-bold text-yellow-700 hover:bg-yellow-200 transition-colors"
+                >
+                  <Star className="w-3 h-3 fill-yellow-500 text-yellow-500" />
+                  {activeGoal}
+                </button>
+                <button 
+                  onClick={() => setShowInventory(true)}
+                  className="flex items-center gap-1 bg-duo-gray/50 rounded-full px-2 py-0.5 text-[9px] font-bold text-duo-gray-dark hover:bg-duo-gray transition-colors"
+                >
+                  <Package className="w-3 h-3" />
+                  {Object.keys(explorationState.inventory).length}
+                </button>
+                <button 
+                  onClick={handleVisualizeScene}
+                  disabled={isVisualizingScene}
+                  className="flex items-center gap-1 bg-sky-100 border border-sky-200 rounded-full px-2 py-0.5 text-[9px] font-bold text-sky-700 hover:bg-sky-200 transition-colors disabled:opacity-50"
+                >
+                  {isVisualizingScene ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />}
+                  {isVisualizingScene ? 'Generating...' : 'Visualize'}
+                </button>
+                {activeFollowers.length > 0 && (
+                  <button
+                    onClick={() => setShowExplorationNearby(true)}
+                    className="flex items-center gap-1 bg-green-100 border border-green-200 rounded-full px-2 py-0.5 text-[9px] font-bold text-duo-green-dark hover:bg-green-200 transition-colors"
+                  >
+                    <Users className="w-3 h-3" />
+                    {activeFollowers.length} follower{activeFollowers.length === 1 ? '' : 's'}
+                  </button>
+                )}
+              </div>
             </div>
-            <p className="text-[10px] text-duo-gray-dark line-clamp-2">{currentLoc?.description || ''}</p>
-            <div className="flex gap-1 mt-1.5 flex-wrap">
-              <button 
-                onClick={() => setShowGoalsModal(true)}
-                className="flex items-center gap-1 bg-yellow-100 border border-yellow-300 rounded-full px-2 py-0.5 text-[9px] font-bold text-yellow-700 hover:bg-yellow-200 transition-colors"
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setShowExplorationMeta(prev => !prev)}
+                className="rounded-full bg-duo-gray/70 p-1.5 text-duo-gray-dark hover:text-duo-text"
+                aria-label={showExplorationMeta ? 'Hide exploration details' : 'Show exploration details'}
               >
-                <Star className="w-3 h-3 fill-yellow-500 text-yellow-500" />
-                {explorationState.goals[0] || 'No goals'}
+                {showExplorationMeta ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
               </button>
-              <button 
-                onClick={() => setShowInventory(true)}
-                className="flex items-center gap-1 bg-duo-gray/50 rounded-full px-2 py-0.5 text-[9px] font-bold text-duo-gray-dark hover:bg-duo-gray transition-colors"
-              >
-                <Package className="w-3 h-3" />
-                {Object.keys(explorationState.inventory).length} items
-              </button>
-              <button 
-                onClick={handleVisualizeScene}
-                disabled={isVisualizingScene}
-                className="flex items-center gap-1 bg-purple-100 border border-purple-200 rounded-full px-2 py-0.5 text-[9px] font-bold text-purple-700 hover:bg-purple-200 transition-colors disabled:opacity-50"
-              >
-                {isVisualizingScene ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />}
-                {isVisualizingScene ? 'Generating...' : 'Visualize'}
-              </button>
+              {(nearbyPlayers.length > 0 || nearbyNpcs.length > 0) && (
+                <button
+                  onClick={() => setShowExplorationNearby(prev => !prev)}
+                  className={`rounded-full p-1.5 border ${showExplorationNearby ? 'bg-duo-blue/10 text-duo-blue border-duo-blue/20' : 'bg-duo-gray/70 text-duo-gray-dark border-transparent hover:text-duo-text'}`}
+                  aria-label={showExplorationNearby ? 'Hide nearby characters' : 'Show nearby characters'}
+                >
+                  <Users className="w-4 h-4" />
+                </button>
+              )}
+              {renderMinimap()}
             </div>
           </div>
-          {renderMinimap()}
-        </div>
 
-        {renderSurvivalBars()}
-
-        {/* Direction buttons */}
-        <div className="px-3 py-2 bg-white border-b border-duo-gray">
           <div className="flex gap-1.5 flex-wrap">
             {connected.map(loc => (
               <button
@@ -4244,55 +4731,94 @@ Be creative and concise.`;
                 → {loc.name}
               </button>
             ))}
+            {connected.length === 0 && (
+              <span className="text-[10px] font-bold bg-duo-gray rounded-lg px-2 py-1 text-duo-gray-dark">
+                No routes
+              </span>
+            )}
           </div>
-          {/* Nearby players */}
-          {worldPlayers.filter(p => p.id !== socket.id && p.locationId === explorationState.locationId).length > 0 && (
-            <div className="flex gap-1.5 flex-wrap mt-1.5 pt-1.5 border-t border-duo-gray/50">
-              <span className="text-[9px] font-bold text-duo-gray-dark self-center">Players here:</span>
-              {worldPlayers.filter(p => p.id !== socket.id && p.locationId === explorationState.locationId).map(p => (
-                <button
-                  key={p.id}
-                  onClick={() => {
-                    const draftedAction = `attack ${p.name}`;
-                    setExplorationInput(draftedAction);
-                    updateTypingPresence('exploration', draftedAction);
-                    requestAnimationFrame(() => {
-                      if (explorationInputRef.current) {
-                        explorationInputRef.current.focus();
-                        explorationInputRef.current.style.height = 'auto';
-                        explorationInputRef.current.style.height = Math.min(explorationInputRef.current.scrollHeight, window.innerHeight / 4) + 'px';
-                      }
-                    });
-                  }}
-                  className="text-[10px] font-bold bg-red-50 text-red-600 border border-red-200 rounded-lg px-2 py-1 hover:bg-red-100 transition-colors flex items-center gap-1"
-                >
-                  ⚔️ Target {p.name}
-                  {p.typing && <TypingDots dotClassName="h-1.5 w-1.5" />}
-                  {p.acting && <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse" title="Acting..." />}
-                </button>
-              ))}
-            </div>
-          )}
-          {worldNpcs.filter(npc => npc.locationId === explorationState.locationId).length > 0 && (
-            <div className="flex gap-1.5 flex-wrap mt-1.5 pt-1.5 border-t border-duo-gray/50">
-              <span className="text-[9px] font-bold text-duo-gray-dark self-center">NPCs here:</span>
-              {worldNpcs.filter(npc => npc.locationId === explorationState.locationId).map(npc => (
-                <span
-                  key={npc.id}
-                  className="text-[10px] font-bold bg-yellow-50 text-yellow-700 border border-yellow-200 rounded-lg px-2 py-1 flex items-center gap-1"
-                >
-                  <span>{getNpcRoleEmoji(npc.role)}</span>
-                  {npc.name}
-                  {npc.followTargetId === socket.id && <span className="text-[9px] text-duo-green-dark">Following</span>}
+
+          {showExplorationMeta && (
+            <div className="pt-1 border-t border-duo-gray/70 space-y-1.5">
+              <p className="text-[10px] text-duo-gray-dark leading-relaxed">{currentLoc?.description || ''}</p>
+              <div className="flex gap-1.5 flex-wrap">
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-green-50 text-duo-green-dark border border-duo-green/20">
+                  {connected.length} routes
                 </span>
-              ))}
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-blue-50 text-duo-blue border border-blue-200">
+                  {nearbyPlayers.length} players
+                </span>
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-yellow-50 text-yellow-700 border border-yellow-200">
+                  {nearbyNpcs.length} npcs
+                </span>
+                {activeFollowers.length > 0 && (
+                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-green-50 text-duo-green-dark border border-green-200">
+                    followers: {activeFollowers.map(npc => npc.name).join(', ')}
+                  </span>
+                )}
+                {(explorationState.equippedWeapon || explorationState.equippedArmor) && (
+                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-gray-100 text-duo-gray-dark border border-duo-gray">
+                    {explorationState.equippedWeapon || explorationState.equippedArmor}
+                  </span>
+                )}
+              </div>
             </div>
           )}
         </div>
 
+        {renderSurvivalBars()}
+
+        {showExplorationNearby && (nearbyPlayers.length > 0 || nearbyNpcs.length > 0) && (
+          <div className="px-2 py-2 bg-white border-b border-duo-gray space-y-2">
+            {nearbyPlayers.length > 0 && (
+              <div className="flex gap-1.5 flex-wrap">
+                <span className="text-[9px] font-bold text-duo-gray-dark self-center">Players:</span>
+                {nearbyPlayers.map(player => (
+                  <button
+                    key={player.id}
+                    onClick={() => {
+                      const draftedAction = `attack ${player.name}`;
+                      setExplorationInput(draftedAction);
+                      updateTypingPresence('exploration', draftedAction);
+                      requestAnimationFrame(() => {
+                        if (explorationInputRef.current) {
+                          explorationInputRef.current.focus();
+                          explorationInputRef.current.style.height = 'auto';
+                          explorationInputRef.current.style.height = Math.min(explorationInputRef.current.scrollHeight, window.innerHeight / 4) + 'px';
+                        }
+                      });
+                    }}
+                    className="text-[10px] font-bold bg-red-50 text-red-600 border border-red-200 rounded-lg px-2 py-1 hover:bg-red-100 transition-colors flex items-center gap-1"
+                  >
+                    ⚔️ {player.name}
+                    {player.typing && <TypingDots dotClassName="h-1.5 w-1.5" />}
+                    {player.acting && <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse" title="Acting..." />}
+                  </button>
+                ))}
+              </div>
+            )}
+            {nearbyNpcs.length > 0 && (
+              <div className="flex gap-1.5 flex-wrap">
+                <span className="text-[9px] font-bold text-duo-gray-dark self-center">NPCs:</span>
+                {nearbyNpcs.map(npc => (
+                  <span
+                    key={npc.id}
+                    className="text-[10px] font-bold bg-yellow-50 text-yellow-700 border border-yellow-200 rounded-lg px-2 py-1 flex items-center gap-1"
+                  >
+                    <span>{getNpcRoleEmoji(npc.role)}</span>
+                    {npc.name}
+                    {npc.followTargetId === socket.id && <span className="text-[9px] text-duo-green-dark">Following</span>}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Exploration log */}
-        <div className="flex-1 overflow-y-auto p-3 space-y-3">
-          {explorationEntries.map((msg, i) => {
+        <div className="flex-1 relative min-h-0">
+          <div ref={explorationScrollContainerRef} onScroll={handleExplorationLogScroll} className="h-full overflow-y-auto p-3 space-y-3">
+            {explorationEntries.map((msg, i) => {
             const isOtherPlayer = msg.role === 'user' && msg.playerName;
             const isMe = msg.role === 'user' && !msg.playerName;
             const isThought = msg.kind === 'thought';
@@ -4362,16 +4888,24 @@ Be creative and concise.`;
               )}
             </div>
             );
-          })}
-          <div ref={explorationEndRef} />
+            })}
+            <div ref={explorationEndRef} />
+          </div>
+          {!explorationAutoScroll && (
+            <button
+              onClick={resumeExplorationAutoScroll}
+              className="absolute bottom-3 right-3 rounded-full bg-duo-blue text-white px-3 py-1.5 text-[10px] font-black uppercase shadow-lg"
+            >
+              Jump to latest
+            </button>
+          )}
         </div>
 
-        {/* Lock-in status bar (multiplayer) */}
         {explorationLockStatus.length > 0 && (
-          <div className="px-3 py-1.5 bg-yellow-50 border-t-2 border-yellow-200 flex flex-wrap items-center gap-2">
-            <span className="text-[10px] font-black text-yellow-700">TURN:</span>
+          <div className="px-2 py-1.5 bg-yellow-50 border-t border-yellow-200 flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] font-black text-yellow-700">TURN</span>
             {explorationLockStatus.map(p => (
-              <span key={p.id} className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${p.lockedIn ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+              <span key={p.id} className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${p.lockedIn ? 'bg-green-100 text-green-700 border-green-200' : 'bg-gray-100 text-gray-500 border-gray-200'}`}>
                 {p.lockedIn ? '🔒' : '⏳'} {p.id === socket.id ? 'You' : p.name}
               </span>
             ))}
@@ -4381,8 +4915,7 @@ Be creative and concise.`;
           </div>
         )}
 
-        {/* Input */}
-        <div className="p-3 bg-white border-t-2 border-duo-gray flex gap-2">
+        <div className="p-2 bg-white border-t border-duo-gray flex gap-2 composer-safe">
           <textarea
             ref={explorationInputRef}
             value={explorationInput}
@@ -4398,7 +4931,7 @@ Be creative and concise.`;
                 handleExplorationSend();
               }
             }}
-            placeholder={isExplorationLockedIn ? "Waiting for other players..." : "What do you do? (gather, craft, talk, explore...)"}
+            placeholder={isExplorationLockedIn ? "Action locked..." : "What now?"}
             className="flex-1 bg-duo-gray rounded-2xl px-3 py-2 text-sm font-bold text-duo-text focus:outline-none focus:ring-2 focus:ring-duo-blue resize-none overflow-y-auto"
             rows={1}
             style={{ minHeight: '40px', maxHeight: '50vh' }}
@@ -4424,21 +4957,26 @@ Be creative and concise.`;
 
         {/* Goals Modal */}
         {showGoalsModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setShowGoalsModal(false)}>
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => { setShowGoalsModal(false); setShowAllGoals(false); }}>
             <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-xl border-b-4 border-yellow-300" onClick={(e) => e.stopPropagation()}>
               <h3 className="text-xl font-black text-duo-text mb-4 flex items-center gap-2">
                 <Star className="w-6 h-6 fill-yellow-500 text-yellow-500" /> Active Goals
               </h3>
               <div className="space-y-3">
-                {explorationState.goals.map((goal, i) => (
+                {(showAllGoals ? explorationState.goals : explorationState.goals.slice(0, 3)).map((goal, i) => (
                   <div key={i} className={`flex items-start gap-3 p-3 rounded-xl ${i === 0 ? 'bg-yellow-50 border-2 border-yellow-300' : 'bg-gray-50 border border-duo-gray'}`}>
                     <span className="text-lg font-black text-duo-gray-dark w-6 text-center">{i + 1}</span>
                     <span className="font-bold text-sm text-duo-text flex-1">{goal}</span>
                     {i === 0 && <Star className="w-5 h-5 fill-yellow-500 text-yellow-500 flex-shrink-0" />}
                   </div>
                 ))}
+                {!showAllGoals && explorationState.goals.length > 3 && (
+                  <button onClick={() => setShowAllGoals(true)} className="w-full rounded-2xl bg-gray-100 border border-duo-gray px-3 py-2 text-sm font-black text-duo-gray-dark">
+                    Show {explorationState.goals.length - 3} more goals
+                  </button>
+                )}
               </div>
-              <button onClick={() => setShowGoalsModal(false)} className="duo-btn duo-btn-blue w-full py-3 mt-6">Close</button>
+              <button onClick={() => { setShowGoalsModal(false); setShowAllGoals(false); }} className="duo-btn duo-btn-blue w-full py-3 mt-6">Close</button>
             </div>
           </div>
         )}
@@ -4605,8 +5143,8 @@ Be creative and concise.`;
   );
 
   return (
-    <div className="h-screen bg-duo-bg flex justify-center overflow-hidden">
-      <div className="w-full max-w-md bg-white h-full flex flex-col relative shadow-2xl">
+    <div className="h-safe-screen bg-duo-bg flex justify-center overflow-hidden">
+      <div className="w-full max-w-md bg-white h-full min-h-0 flex flex-col relative shadow-2xl">
         {renderTopBar()}
         
         {gameState === 'menu' && renderMenu()}
