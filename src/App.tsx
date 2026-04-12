@@ -923,6 +923,7 @@ export default function App() {
   const [showFullMap, setShowFullMap] = useState(false);
   const [mapZoom, setMapZoom] = useState(1);
   const [mapPan, setMapPan] = useState({ x: 0, y: 0 });
+  const mapZoomRef = useRef(1);
   const mapDragRef = useRef<{ dragging: boolean; lastX: number; lastY: number }>({ dragging: false, lastX: 0, lastY: 0 });
   const [showInventory, setShowInventory] = useState(false);
   const [showCharImage, setShowCharImage] = useState(false);
@@ -4826,6 +4827,7 @@ Be creative and concise.`;
             style={{ width: mapW, height: mapH }}
             onClick={() => {
               if (worldData?.meta?.gridSize) {
+                mapZoomRef.current = 1;
                 setMapZoom(1);
                 centerFullMapOnCurrentPosition(1);
               }
@@ -4936,9 +4938,10 @@ Be creative and concise.`;
                 const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                 const mouseX = e.clientX - rect.left;
                 const mouseY = e.clientY - rect.top;
-                const oldZoom = mapZoom;
+                const oldZoom = mapZoomRef.current;
                 const newZoom = Math.min(5, Math.max(0.5, oldZoom + (e.deltaY > 0 ? -0.15 : 0.15)));
                 const scale = newZoom / oldZoom;
+                mapZoomRef.current = newZoom;
                 setMapZoom(newZoom);
                 setMapPan(p => ({
                   x: mouseX - scale * (mouseX - p.x),
@@ -4974,9 +4977,10 @@ Be creative and concise.`;
                     const rect = el.getBoundingClientRect();
                     const cx = midX - rect.left;
                     const cy = midY - rect.top;
-                    const oldZoom = mapZoom;
+                    const oldZoom = mapZoomRef.current;
                     const newZoom = Math.min(5, Math.max(0.5, oldZoom * scale));
                     const s = newZoom / oldZoom;
+                    mapZoomRef.current = newZoom;
                     setMapZoom(newZoom);
                     setMapPan(p => ({ x: cx - s * (cx - p.x), y: cy - s * (cy - p.y) }));
                   }
@@ -5012,8 +5016,8 @@ Be creative and concise.`;
               }}
             >
               <div className="absolute top-2 left-2 z-10 flex gap-1">
-                <button onClick={() => setMapZoom(z => Math.min(5, z + 0.3))} className="bg-white/90 rounded-full w-7 h-7 text-sm font-black text-blue-900 shadow">+</button>
-                <button onClick={() => setMapZoom(z => Math.max(0.5, z - 0.3))} className="bg-white/90 rounded-full w-7 h-7 text-sm font-black text-blue-900 shadow">−</button>
+                <button onClick={() => setMapZoom(z => { const v = Math.min(5, z + 0.3); mapZoomRef.current = v; return v; })} className="bg-white/90 rounded-full w-7 h-7 text-sm font-black text-blue-900 shadow">+</button>
+                <button onClick={() => setMapZoom(z => { const v = Math.max(0.5, z - 0.3); mapZoomRef.current = v; return v; })} className="bg-white/90 rounded-full w-7 h-7 text-sm font-black text-blue-900 shadow">−</button>
                 <button onClick={() => {
                   if (gridSize) {
                     centerFullMapOnCurrentPosition(mapZoom);
