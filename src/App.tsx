@@ -131,6 +131,15 @@ const summarizeBattleLogEntry = (entry: string) => {
   return entry.replace(/\s+/g, ' ').slice(0, 140);
 };
 
+const getHealthBarFillClass = (hp: number, maxHp: number) => {
+  const safeMaxHp = Math.max(1, maxHp || 1);
+  const ratio = Math.max(0, Math.min(1, hp / safeMaxHp));
+  if (ratio > 0.75) return 'bg-green-500';
+  if (ratio > 0.5) return 'bg-yellow-400';
+  if (ratio > 0.25) return 'bg-orange-400';
+  return 'bg-red-500';
+};
+
 const normalizeCharacter = (value: any): Character => ({
   ...value,
   name: value?.name || 'Unknown',
@@ -666,7 +675,7 @@ export default function App() {
       explorationModel: 'gemini-3-flash-preview',
       battleModel: 'gemini-2.5-pro',
       botModel: 'gemini-2.5-flash',
-      unlimitedTurnTime: false,
+      unlimitedTurnTime: true,
     };
     const saved = localStorage.getItem('duo_settings');
     if (saved) {
@@ -680,7 +689,7 @@ export default function App() {
         if (parsed.battleModel && !validModels.includes(parsed.battleModel)) parsed.battleModel = defaultSettings.battleModel;
         if (parsed.botModel && !validModels.includes(parsed.botModel)) parsed.botModel = defaultSettings.botModel;
         
-        return { ...defaultSettings, ...parsed };
+        return { ...defaultSettings, ...parsed, unlimitedTurnTime: true };
       } catch (e) {
         return defaultSettings;
       }
@@ -3576,8 +3585,8 @@ This battle image must ALWAYS include cinematic UI text overlays integrated into
                     </div>
                     <div className="h-2 bg-duo-gray rounded-full overflow-hidden">
                       <div 
-                        className={`h-full transition-all duration-500 ${isMe ? 'bg-duo-green' : 'bg-duo-red'}`}
-                        style={{ width: `${Math.max(0, p.character.hp)}%` }} 
+                          className={`h-full transition-all duration-500 ${getHealthBarFillClass(p.character.hp, p.character.maxHp)}`}
+                          style={{ width: `${Math.max(0, Math.min(100, (p.character.hp / Math.max(1, p.character.maxHp || 1)) * 100))}%` }} 
                       />
                     </div>
                   </div>
@@ -4022,9 +4031,6 @@ Be creative and concise.`;
   const renderArenaPreparation = () => {
     const prepPlayers = Object.entries(players);
     const activeTypingIds = new Set([...roomTypingIds, ...localRoomTypingIds]);
-    const remaining = arenaPreparation?.remaining;
-    const timerLabel = remaining == null ? '∞' : `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}`;
-    const isUnlimitedPrepTime = !!arenaPreparation?.unlimited;
     const hasLocalRewriteAccess = !!(socket.id && players[socket.id]?.prepSkippedPreview);
     const isTweakStage = arenaPreparation?.stage === 'tweak' || hasLocalRewriteAccess;
     const isHeadStartRewrite = arenaPreparation?.stage === 'preview' && hasLocalRewriteAccess;
@@ -4045,15 +4051,14 @@ Be creative and concise.`;
               <p className="text-xs font-bold text-duo-gray-dark mt-1 max-w-[18rem]">
                 {isTweakStage
                   ? (isHeadStartRewrite
-                    ? 'You started your rewrite early while the remaining preview countdown continues for anyone still reviewing.'
+                    ? 'You started your rewrite early while the remaining preview phase continues for anyone still reviewing.'
                     : 'You have one pass to refine your legend before the duel begins.')
-                  : 'Inspect every legend now. The rewrite window opens after the 15 second preview countdown or once everyone skips ahead.'}
+                  : 'Inspect every legend now. The rewrite window opens once everyone is ready to move on.'}
               </p>
             </div>
             <div className={`rounded-2xl px-3 py-2 border text-center min-w-[88px] ${isTweakStage ? 'bg-yellow-50 text-yellow-700 border-yellow-200' : 'bg-blue-50 text-duo-blue border-blue-200'}`}>
               <div className="text-[9px] font-black uppercase">{isTweakStage ? (isHeadStartRewrite ? 'Head Start' : 'Tweak') : 'Preview'}</div>
-              <div className="text-lg font-black leading-none mt-1">{timerLabel}</div>
-              {isUnlimitedPrepTime && <div className="text-[9px] font-black uppercase mt-1">No limit</div>}
+              <div className="text-[11px] font-black leading-none mt-2 uppercase">Always On</div>
             </div>
           </div>
           <div className="flex flex-wrap justify-center gap-5 pt-1">
@@ -4234,11 +4239,6 @@ Be creative and concise.`;
         <div className="p-2 bg-white border-b border-duo-gray flex items-center justify-between gap-2">
           <div className="min-w-0 flex items-center gap-2">
             <h1 className="font-black text-sm text-duo-text truncate">{battleTitle}</h1>
-            {turnTimerRemaining != null && (
-              <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border whitespace-nowrap ${turnTimerRemaining <= 10 ? 'bg-red-100 text-red-700 border-red-200 animate-pulse' : turnTimerRemaining <= 20 ? 'bg-orange-100 text-orange-700 border-orange-200' : 'bg-blue-100 text-blue-700 border-blue-200'}`}>
-                ⏱️ {turnTimerRemaining}s
-              </span>
-            )}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -5720,21 +5720,15 @@ Be creative and concise.`;
                       <div>
                         <h4 className="text-sm font-black text-duo-text">Unlimited Turn Times</h4>
                         <p className="text-xs text-duo-gray-dark mt-1">
-                          Disable countdowns across arena preview, rewrite, and battle phases for new PvP rooms and bot fights.
+                          Arena preview, rewrite, and battle phases now run without countdowns for new PvP rooms and bot fights.
                         </p>
                       </div>
-                      <button
-                        onClick={() => setSettings({ ...settings, unlimitedTurnTime: !settings.unlimitedTurnTime })}
-                        className={`relative inline-flex h-8 w-14 items-center rounded-full p-1 transition-colors ${settings.unlimitedTurnTime ? 'bg-duo-green' : 'bg-duo-gray-dark/30'}`}
-                        aria-pressed={settings.unlimitedTurnTime}
-                      >
-                        <span
-                          className={`block h-6 w-6 rounded-full bg-white shadow transition-transform ${settings.unlimitedTurnTime ? 'translate-x-6' : 'translate-x-0'}`}
-                        />
-                      </button>
+                      <span className="inline-flex items-center rounded-full bg-duo-green px-3 py-1 text-[10px] font-black uppercase text-white">
+                        Always On
+                      </span>
                     </div>
                     <div className="mt-3 text-[11px] font-bold text-duo-gray-dark">
-                      Current state: {settings.unlimitedTurnTime ? 'All arena phase timers disabled for new rooms' : 'Standard timed arena phases'}
+                      Current state: All arena phase timers are disabled for new rooms.
                     </div>
                   </div>
                 </div>

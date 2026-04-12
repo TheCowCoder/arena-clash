@@ -43,6 +43,8 @@ const stringifyUnknown = (value: unknown): string => {
   }
 };
 
+const compactWhitespace = (value: string): string => value.replace(/\s+/g, " ").trim();
+
 const parseEmbeddedPayload = (message: string): ErrorPayload | null => {
   const firstBrace = message.indexOf("{");
   if (firstBrace === -1) return null;
@@ -86,7 +88,7 @@ export const classifyAIError = (error: unknown): AIErrorInfo => {
     getString(errorObj?.error?.status)?.toUpperCase() ||
     payload?.status?.toUpperCase() ||
     extractStatusText(rawMessage);
-  const detail = extractMessage(errorObj, payload, rawMessage);
+  const rawDetail = compactWhitespace(extractMessage(errorObj, payload, rawMessage));
   const errorName = getString(errorObj?.name) || "";
 
   const isRateLimit =
@@ -115,18 +117,24 @@ export const classifyAIError = (error: unknown): AIErrorInfo => {
     (!!statusText && RETRYABLE_STATUS_TEXT.has(statusText));
 
   let label = "Gemini request failed";
+  let detail = rawDetail;
   if (isRateLimit) {
-    label = statusCode === 429 ? "API rate limited (429)" : "API rate limited";
+    label = "Gemini is busy right now";
+    detail = label;
   } else if (isServiceUnavailable) {
-    label = statusCode === 503 ? "Gemini service unavailable (503)" : "Gemini service unavailable";
+    label = "Gemini is temporarily unavailable";
+    detail = label;
   } else if (isTimeout) {
     label = "Gemini request timed out";
+    detail = label;
   } else if (isNetwork) {
     label = "Gemini connection failed";
+    detail = label;
   } else if (isServerError && statusCode) {
-    label = `Gemini server error (${statusCode})`;
+    label = "Gemini server error";
+    detail = label;
   } else if (statusCode) {
-    label = `Gemini request failed (${statusCode})`;
+    label = "Gemini request failed";
   }
 
   return {

@@ -313,7 +313,10 @@ async function startServer() {
     if (!db) return res.json({});
     try {
       const settings = await db.collection("settings").findOne({ _id: "global" as any });
-      res.json(settings?.data || {});
+      res.json({
+        ...(settings?.data || {}),
+        unlimitedTurnTime: ALWAYS_UNLIMITED_TURN_TIME,
+      });
     } catch (e) {
       res.json({});
     }
@@ -327,6 +330,7 @@ async function startServer() {
       for (const key of allowedKeys) {
         if (req.body[key] !== undefined) data[key] = req.body[key];
       }
+      data.unlimitedTurnTime = ALWAYS_UNLIMITED_TURN_TIME;
       await db.collection("settings").updateOne(
         { _id: "global" as any },
         { $set: { data, updatedAt: new Date() } },
@@ -358,6 +362,7 @@ async function startServer() {
   const TURN_TIMER_SECONDS = 90;
   const ARENA_PREVIEW_SECONDS = 15;
   const ARENA_TWEAK_SECONDS = 120;
+  const ALWAYS_UNLIMITED_TURN_TIME = true;
   const SESSION_RECONNECT_GRACE_MS = 45_000;
   const socketSessionIds: Record<string, string> = {};
   const sessionSocketIds: Record<string, string> = {};
@@ -1356,6 +1361,7 @@ async function startServer() {
       isBotMatch: false,
       isPvpExploration: true,
       phase: 'battle',
+      unlimitedTurnTime: ALWAYS_UNLIMITED_TURN_TIME,
       battleTurnSeconds: TURN_TIMER_SECONDS,
       players: {
         [challengerId]: { lockedIn: false, action: "", character: challengerCharacter },
@@ -2795,6 +2801,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         isBotMatch: false,
         isPvpExploration: true,
         phase: 'battle',
+        unlimitedTurnTime: ALWAYS_UNLIMITED_TURN_TIME,
         battleTurnSeconds: TURN_TIMER_SECONDS,
         players: {
           [data.challengerId]: { lockedIn: false, action: "", character: challenger.character },
@@ -2904,7 +2911,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         host: socket.id,
         isBotMatch: true,
         botCharacterId: data.botCharacterId || null,
-        unlimitedTurnTime: !!data.unlimitedTurnTime,
+        unlimitedTurnTime: ALWAYS_UNLIMITED_TURN_TIME,
         arenaPreviewSeconds: typeof data.arenaPreviewSeconds === 'number' ? data.arenaPreviewSeconds : ARENA_PREVIEW_SECONDS,
         arenaTweakSeconds: typeof data.arenaTweakSeconds === 'number' ? data.arenaTweakSeconds : ARENA_TWEAK_SECONDS,
         battleTurnSeconds: typeof data.battleTurnSeconds === 'number' ? data.battleTurnSeconds : TURN_TIMER_SECONDS,
@@ -2983,7 +2990,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         id: socket.id,
         character: players[socket.id].character,
         isReady: false,
-        unlimitedTurnTime: !!data?.unlimitedTurnTime,
+        unlimitedTurnTime: ALWAYS_UNLIMITED_TURN_TIME,
         arenaPreviewSeconds: typeof data?.arenaPreviewSeconds === 'number' ? data.arenaPreviewSeconds : undefined,
         arenaTweakSeconds: typeof data?.arenaTweakSeconds === 'number' ? data.arenaTweakSeconds : undefined,
         battleTurnSeconds: typeof data?.battleTurnSeconds === 'number' ? data.battleTurnSeconds : undefined,
@@ -3019,7 +3026,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
             id: roomId,
             host: queueList[0].id,
             players: roomPlayers,
-            unlimitedTurnTime: queueList.some(p => p.unlimitedTurnTime),
+            unlimitedTurnTime: ALWAYS_UNLIMITED_TURN_TIME,
             arenaPreviewSeconds: queueList.find(p => typeof p.arenaPreviewSeconds === 'number')?.arenaPreviewSeconds ?? ARENA_PREVIEW_SECONDS,
             arenaTweakSeconds: queueList.find(p => typeof p.arenaTweakSeconds === 'number')?.arenaTweakSeconds ?? ARENA_TWEAK_SECONDS,
             battleTurnSeconds: queueList.find(p => typeof p.battleTurnSeconds === 'number')?.battleTurnSeconds ?? TURN_TIMER_SECONDS,
@@ -3371,7 +3378,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       const room = roomId ? rooms[roomId] : null;
       const queueState = !!matchmakingQueue[socket.id];
       const hasExplorationState = !!explorationPlayers[socket.id];
-      const hasRoomState = !!room;
+      const hasResumableRoomState = !!room && room.phase === 'battle';
       let explorationInterrupted = false;
 
       if (activeExplorationRequests[socket.id]) {
@@ -3380,7 +3387,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         explorationInterrupted = true;
       }
 
-      if (roomId && room) {
+      if (roomId && hasResumableRoomState) {
         if (!(room.disconnectedParticipantIds instanceof Set)) {
           room.disconnectedParticipantIds = new Set<string>();
         }
@@ -3394,7 +3401,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         });
       }
 
-      const shouldHoldForReconnect = !!sessionId && (queueState || hasExplorationState || hasRoomState);
+      const shouldHoldForReconnect = !!sessionId && (queueState || hasExplorationState || hasResumableRoomState);
       if (!shouldHoldForReconnect) {
         finalizeSocketDisconnect(socket.id, sessionId);
         return;
