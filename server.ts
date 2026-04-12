@@ -1265,8 +1265,10 @@ async function startServer() {
     room.phase = 'tweak';
     for (const playerId of Object.keys(room.players)) {
       const p = room.players[playerId];
-      // Keep bots locked in if they already locked during preview
-      p.lockedIn = !!p?.character?.isNpcAlly || (playerId.startsWith('bot_') && !!p.lockedIn);
+      // Preserve existing lock-in for humans; keep bots locked if already locked
+      if (!p.lockedIn) {
+        p.lockedIn = !!p?.character?.isNpcAlly || (playerId.startsWith('bot_') && false);
+      }
       p.prepSkippedPreview = true;
     }
     emitRoomPlayersUpdated(roomId);

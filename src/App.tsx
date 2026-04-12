@@ -1989,13 +1989,13 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         try {
           while (true) {
             if (signal.aborted) break;
-            const BATTLE_STREAM_STALL_MS = 60_000;
+            const BATTLE_STREAM_STALL_MS = 120_000;
             let battleStreamStallTimer: ReturnType<typeof setTimeout> | null = null;
             const clearBattleStallTimer = () => { if (battleStreamStallTimer) { clearTimeout(battleStreamStallTimer); battleStreamStallTimer = null; } };
             const resetBattleStallTimer = () => {
               clearBattleStallTimer();
               battleStreamStallTimer = setTimeout(() => {
-                console.warn('[BattleStream] No chunk received in 60s — aborting stalled stream');
+                console.warn('[BattleStream] No chunk received in 120s — aborting stalled stream');
                 abortControllerRef.current?.abort();
               }, BATTLE_STREAM_STALL_MS);
             };
@@ -2009,7 +2009,8 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
                   includeThoughts: true,
                   thinkingBudget: 4096
                 },
-                tools: [{ functionDeclarations: [readBattleHistory as any, submitBattleResult as any] }]
+                tools: [{ functionDeclarations: [readBattleHistory as any, submitBattleResult as any] }],
+                abortSignal: signal,
               },
             });
 
@@ -2943,7 +2944,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
 
     let attempts = 0;
     const charAbort = new AbortController();
-    const CHAR_STREAM_STALL_MS = 30_000;
+    const CHAR_STREAM_STALL_MS = 60_000;
 
     while (true) {
       if (charAbort.signal.aborted) break;
@@ -2955,7 +2956,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       const resetCharStallTimer = () => {
         clearCharStallTimer();
         charStallTimer = setTimeout(() => {
-          console.warn('[CharStream] No chunk received in 30s — aborting stalled stream');
+          console.warn('[CharStream] No chunk received in 60s — aborting stalled stream');
           charAbort.abort();
         }, CHAR_STREAM_STALL_MS);
       };
@@ -4967,13 +4968,17 @@ Be creative and concise.`;
                 el.dataset.pointers = JSON.stringify(pointers);
                 const pts = Object.values(pointers);
                 if (pts.length >= 2) {
-                  // Pinch zoom
+                  // Pinch zoom + 2-finger pan
                   const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+                  const midX = (pts[0].x + pts[1].x) / 2;
+                  const midY = (pts[0].y + pts[1].y) / 2;
                   const lastDist = parseFloat(el.dataset.lastPinchDist || '');
+                  const lastMidX = parseFloat(el.dataset.lastPinchMidX || '');
+                  const lastMidY = parseFloat(el.dataset.lastPinchMidY || '');
                   if (lastDist && lastDist > 0) {
-                    const scale = dist / lastDist;
-                    const midX = (pts[0].x + pts[1].x) / 2;
-                    const midY = (pts[0].y + pts[1].y) / 2;
+                    // Clamp scale to prevent abrupt jumps
+                    const rawScale = dist / lastDist;
+                    const scale = Math.min(1.08, Math.max(0.92, rawScale));
                     const rect = el.getBoundingClientRect();
                     const cx = midX - rect.left;
                     const cy = midY - rect.top;
@@ -4982,9 +4987,14 @@ Be creative and concise.`;
                     const s = newZoom / oldZoom;
                     mapZoomRef.current = newZoom;
                     setMapZoom(newZoom);
-                    setMapPan(p => ({ x: cx - s * (cx - p.x), y: cy - s * (cy - p.y) }));
+                    // Apply both zoom pivot and 2-finger pan delta
+                    const panDx = lastMidX ? midX - lastMidX : 0;
+                    const panDy = lastMidY ? midY - lastMidY : 0;
+                    setMapPan(p => ({ x: cx - s * (cx - p.x) + panDx, y: cy - s * (cy - p.y) + panDy }));
                   }
                   el.dataset.lastPinchDist = String(dist);
+                  el.dataset.lastPinchMidX = String(midX);
+                  el.dataset.lastPinchMidY = String(midY);
                   return;
                 }
                 if (!mapDragRef.current.dragging) return;
@@ -5000,6 +5010,8 @@ Be creative and concise.`;
                 delete pointers[e.pointerId];
                 el.dataset.pointers = JSON.stringify(pointers);
                 el.dataset.lastPinchDist = '';
+                el.dataset.lastPinchMidX = '';
+                el.dataset.lastPinchMidY = '';
                 if (Object.keys(pointers).length === 0) {
                   mapDragRef.current.dragging = false;
                 }
@@ -5010,6 +5022,8 @@ Be creative and concise.`;
                 delete pointers[e.pointerId];
                 el.dataset.pointers = JSON.stringify(pointers);
                 el.dataset.lastPinchDist = '';
+                el.dataset.lastPinchMidX = '';
+                el.dataset.lastPinchMidY = '';
                 if (Object.keys(pointers).length === 0) {
                   mapDragRef.current.dragging = false;
                 }
@@ -5723,7 +5737,7 @@ Be creative and concise.`;
 
         {showSettings && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-xl border-b-4 border-gray-200">
+            <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-xl border-b-4 border-gray-200 max-h-[90vh] overflow-y-auto">
               <h3 className="text-2xl font-black text-duo-text mb-6 text-center">Settings</h3>
               <div className="flex gap-2 mb-6">
                 <button
