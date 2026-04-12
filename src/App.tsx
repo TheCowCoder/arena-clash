@@ -1294,9 +1294,19 @@ export default function App() {
     socket.io.on('reconnect_error', handleReconnectError);
     socket.io.on('reconnect_failed', handleReconnectFailed);
     socket.on('connect', handleConnect);
+
+    // iOS Safari: force reconnect when returning from background
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && !socket.connected) {
+        console.log('[Visibility] Page visible, socket disconnected — forcing reconnect');
+        socket.connect();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     
     return () => {
       clearConnectionPhaseTimeout();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       socket.off('characterSynced', handleCharacterSynced);
       socket.off('disconnect', handleDisconnect);
       socket.off('connect', handleConnect);
@@ -4109,27 +4119,27 @@ Be creative and concise.`;
 
     return (
       <div className="flex-1 flex flex-col bg-gray-50 overflow-hidden">
-        <div className="p-4 bg-white border-b-2 border-duo-gray space-y-3">
-          <div className="flex items-start justify-between gap-3">
+        <div className="px-3 py-2 bg-white border-b-2 border-duo-gray space-y-2">
+          <div className="flex items-start justify-between gap-2">
             <div>
               <div className="text-[10px] font-black uppercase tracking-[0.2em] text-duo-blue">Arena Preparation</div>
-              <h2 className="text-xl font-black text-duo-text mt-1">
+              <h2 className="text-lg font-black text-duo-text mt-0.5">
                 {isTweakStage ? (isHeadStartRewrite ? 'Head Start Rewrite' : 'Final Rewrite Window') : 'Study The Opponents'}
               </h2>
-              <p className="text-xs font-bold text-duo-gray-dark mt-1 max-w-[18rem]">
+              <p className="text-[11px] font-bold text-duo-gray-dark mt-0.5 max-w-[16rem] leading-tight">
                 {isTweakStage
                   ? (isHeadStartRewrite
                     ? 'You started your rewrite early while the remaining preview phase continues for anyone still reviewing.'
-                    : 'You have one pass to refine your legend before the duel begins.')
-                  : 'Inspect every legend now. The rewrite window opens once everyone is ready to move on.'}
+                    : 'Refine your legend before the duel begins.')
+                  : 'Inspect every legend. The rewrite window opens once everyone is ready.'}
               </p>
             </div>
-            <div className={`rounded-2xl px-3 py-2 border text-center min-w-[88px] ${isTweakStage ? 'bg-yellow-50 text-yellow-700 border-yellow-200' : 'bg-blue-50 text-duo-blue border-blue-200'}`}>
+            <div className={`rounded-2xl px-2.5 py-1.5 border text-center min-w-[72px] ${isTweakStage ? 'bg-yellow-50 text-yellow-700 border-yellow-200' : 'bg-blue-50 text-duo-blue border-blue-200'}`}>
               <div className="text-[9px] font-black uppercase">{isTweakStage ? (isHeadStartRewrite ? 'Head Start' : 'Tweak') : 'Preview'}</div>
-              <div className="text-[11px] font-black leading-none mt-2 uppercase">Always On</div>
+              <div className="text-[10px] font-black leading-none mt-1 uppercase">Always On</div>
             </div>
           </div>
-          <div className="flex flex-wrap justify-center gap-5 pt-1">
+          <div className="flex flex-wrap justify-center gap-3 pt-0.5">
             {prepPlayers.map(([id, player]) => {
               const isMe = id === socket.id;
               const isLockedIn = !!player.lockedIn;
@@ -4143,9 +4153,9 @@ Be creative and concise.`;
                     setProfileToView(player.character.profileMarkdown);
                     setShowProfileModal(true);
                   }}
-                  className={`flex flex-col items-center gap-2 min-w-[96px] ${canInspect ? '' : 'opacity-80 cursor-default'}`}
+                  className={`flex flex-col items-center gap-1.5 min-w-[80px] ${canInspect ? '' : 'opacity-80 cursor-default'}`}
                 >
-                  <div className={`relative w-20 h-20 rounded-full border-4 shadow-lg overflow-hidden ${isMe ? 'border-duo-green bg-duo-green/10' : 'border-duo-blue bg-duo-blue/10'}`}>
+                  <div className={`relative w-16 h-16 rounded-full border-4 shadow-lg overflow-hidden ${isMe ? 'border-duo-green bg-duo-green/10' : 'border-duo-blue bg-duo-blue/10'}`}>
                     {(isMe ? character?.imageUrl : player.character.imageUrl) ? (
                       <img src={isMe ? character?.imageUrl : player.character.imageUrl} alt={player.character.name} className="w-full h-full object-cover" />
                     ) : (
@@ -4176,8 +4186,8 @@ Be creative and concise.`;
         </div>
 
         {!isTweakStage ? (
-          <div className="flex-1 flex flex-col items-center justify-center px-8 text-center text-duo-gray-dark">
-            <div className="w-24 h-24 rounded-full bg-duo-blue/10 text-duo-blue flex items-center justify-center mb-5">
+          <div className="flex-1 flex flex-col items-center justify-center px-6 text-center text-duo-gray-dark overflow-y-auto">
+            <div className="w-20 h-20 rounded-full bg-duo-blue/10 text-duo-blue flex items-center justify-center mb-4">
               <Users className="w-12 h-12" />
             </div>
             <h3 className="text-xl font-black text-duo-text">Avatar Review Phase</h3>
@@ -4944,7 +4954,8 @@ Be creative and concise.`;
                 el.dataset.pointers = JSON.stringify(pointers);
                 el.dataset.lastPinchDist = '';
                 mapDragRef.current = { dragging: true, lastX: e.clientX, lastY: e.clientY };
-                el.setPointerCapture(e.pointerId);
+                // Skip setPointerCapture for touch — Safari blocks second pointer
+                if (e.pointerType !== 'touch') el.setPointerCapture(e.pointerId);
               }}
               onPointerMove={(e) => {
                 const el = e.currentTarget as HTMLElement;
