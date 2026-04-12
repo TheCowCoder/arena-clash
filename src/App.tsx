@@ -2056,10 +2056,13 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
             let streamedAnswer = "";
 
             resetBattleStallTimer();
+            let chunkCount = 0;
             for await (const chunk of responseStream) {
+              chunkCount++;
               resetBattleStallTimer();
               if (signal.aborted) break;
               const parts = chunk.candidates?.[0]?.content?.parts || [];
+              console.log(`[BattleStream] chunk #${chunkCount}, parts: ${parts.length}, types: [${parts.map((p: any) => p.functionCall ? 'functionCall' : p.thought ? 'thought' : p.text ? 'text' : 'unknown').join(', ')}]`);
               for (const part of parts) {
                 modelParts.push(part);
                 if (part.functionCall) {
@@ -2093,6 +2096,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
               }
             }
             clearBattleStallTimer();
+            console.log(`[BattleStream] Stream ended. chunkCount=${chunkCount}, hasToolCall=${hasToolCall}, signal.aborted=${signal.aborted}, finalAnswer.length=${finalAnswer.length + streamedAnswer.length}, finalThoughts.length=${finalThoughts.length + streamedThoughts.length}`);
             if (signal.aborted) break;
 
             finalThoughts += streamedThoughts;
@@ -2100,6 +2104,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
 
             if (hasToolCall && toolCallPart) {
               const functionCall = toolCallPart.functionCall;
+              console.log(`[BattleStream] Tool call: ${functionCall?.name}`, functionCall?.args ? Object.keys(functionCall.args) : 'no args');
               if (!functionCall) {
                 continue;
               }
@@ -2171,6 +2176,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
               }
             } else {
               // Done — no tool call, extract state from text as fallback
+              console.log(`[BattleStream] No tool call — using text fallback. finalAnswer.length=${(finalAnswer + streamedAnswer).trim().length}`);
               const combinedOutput = finalThoughts + "\n" + finalAnswer;
               
               const stateMatch = combinedOutput.match(/<BATTLE_STATE>([\s\S]*?)(?:<\/BATTLE_STATE>|$)/);
@@ -2220,6 +2226,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
           }
         } catch (error: any) {
           clearBattleStallTimer();
+          console.error(`[BattleStream] Caught error: name=${error.name}, message=${error.message?.substring(0, 200)}, battleStallAborted=${battleStallAborted}`);
           // Stall timer abort: retry with a fresh AbortController
           if (error.name === 'AbortError' && battleStallAborted) {
             battleStallAborted = false;
