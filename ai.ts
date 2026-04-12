@@ -94,17 +94,17 @@ export const classifyAIError = (error: unknown): AIErrorInfo => {
   const isRateLimit =
     statusCode === 429 ||
     statusText === "RESOURCE_EXHAUSTED" ||
-    /quota|rate limit|too many requests/i.test(detail);
+    /quota|rate limit|too many requests/i.test(rawDetail);
   const isServiceUnavailable =
     statusCode === 503 || statusText === "UNAVAILABLE";
   const isTimeout =
     statusCode === 408 ||
     statusText === "DEADLINE_EXCEEDED" ||
     errorName === "APIConnectionTimeoutError" ||
-    /timed?\s*out|deadline exceeded/i.test(detail);
+    /timed?\s*out|deadline exceeded/i.test(rawDetail);
   const isNetwork =
     errorName === "APIConnectionError" ||
-    /fetch failed|network|socket hang up|econnreset|enotfound|connection reset/i.test(detail);
+    /fetch failed|network|socket hang up|econnreset|enotfound|connection reset/i.test(rawDetail);
   const isServerError =
     typeof statusCode === "number" && statusCode >= 500;
 
