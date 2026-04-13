@@ -717,6 +717,15 @@ export default function App() {
   useEffect(() => {
     settingsRef.current = settings;
     localStorage.setItem('duo_settings', JSON.stringify(settings));
+    // Sync model settings to room if we're the host
+    if (roomId) {
+      socket.emit('updateRoomSettings', {
+        charModel: settings.charModel,
+        explorationModel: settings.explorationModel,
+        battleModel: settings.battleModel,
+        botModel: settings.botModel,
+      });
+    }
   }, [settings]);
 
   useEffect(() => {
@@ -1697,10 +1706,19 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       setGameState('arena_prep');
     });
 
-    socket.on('roomPlayersUpdated', (data: { players: Record<string, any>; phase: string }) => {
+    socket.on('roomPlayersUpdated', (data: { players: Record<string, any>; phase: string; modelSettings?: any }) => {
       setPlayers(data.players);
       if (data.phase === 'preview' || data.phase === 'tweak') {
         setArenaPreparation(prev => prev ? { ...prev, stage: data.phase as ArenaPreparationState['stage'] } : prev);
+      }
+      if (data.modelSettings) {
+        setSettings(prev => ({ ...prev, ...data.modelSettings, apiKey: prev.apiKey }));
+      }
+    });
+
+    socket.on('roomSettingsUpdated', (modelSettings: any) => {
+      if (modelSettings) {
+        setSettings(prev => ({ ...prev, ...modelSettings, apiKey: prev.apiKey }));
       }
     });
 
@@ -2687,6 +2705,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
               botName: enemyName,
               npcAllies,
               unlimitedTurnTime: settingsRef.current.unlimitedTurnTime,
+              modelSettings: { charModel: settingsRef.current.charModel, explorationModel: settingsRef.current.explorationModel, battleModel: settingsRef.current.battleModel, botModel: settingsRef.current.botModel },
             });
             toolBadges.push(`⚔️ **Combat Initiated** — engaging ${enemyName}!`);
           } else if (tc.name === 'move_to_location') {
@@ -2779,6 +2798,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       socket.off('waitingForOpponent');
       socket.off('arenaPreparationState');
       socket.off('roomPlayersUpdated');
+      socket.off('roomSettingsUpdated');
       socket.off('matchFound');
       socket.off('battleMapStateUpdated');
       socket.off('battleMapMovementLog');
@@ -3441,22 +3461,28 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       const avatarReferenceParts = Object.values(players)
         .filter((participant: any) => !participant.character?.isNpcAlly)
         .slice(0, 2)
-        .flatMap((participant: any) => {
+        .flatMap((participant: any, idx: number) => {
           const avatarPart = buildInlineImagePartFromDataUrl(participant.character?.imageUrl);
           if (!avatarPart) return [];
+          const side = idx === 0 ? 'LEFT side' : 'RIGHT side';
           return [
-            { text: `Reference avatar for ${participant.character?.name || 'Combatant'}.` },
+            { text: `Reference avatar for ${participant.character?.name || 'Combatant'} — draw this character on the ${side} of the image and bottom panel.` },
             avatarPart,
           ];
         });
+      const orderedCombatants = Object.values(players)
+        .filter((p: any) => !p.character?.isNpcAlly)
+        .slice(0, 2);
+      const leftName = (orderedCombatants[0] as any)?.character?.name || 'Combatant 1';
+      const rightName = (orderedCombatants[1] as any)?.character?.name || 'Combatant 2';
       const prompt = `Generate a dynamic battle scene illustration for ${playerNames}. This must be a NEW poster image for the CURRENT turn, not an edit of any previous turn image. Latest resolved battle narrative: ${recentLogs || 'The battle has just begun.'}. Current positions: ${battleLocationSummary || 'Use the active battlefield state.'}. Authoritative battlefield state: ${battleMapImageContext || 'Use the active battlefield state.'}. Style: fantasy RPG battle poster art, dramatic action poses, magical effects, vibrant colors.
 
 This battle image must ALWAYS include cinematic UI text overlays integrated into the art:
 - A bold top headline announcing the battle beat.
 - Small location label text for at least one relevant battlefield location.
-- A bottom split result panel for both combatants with a cool icon, the move name, and a short outcome description.
+- A bottom split result panel: ${leftName} on the LEFT, ${rightName} on the RIGHT. Each side shows the character's name, a cool icon, the move name, and a short outcome. Match each character to their reference avatar — do NOT swap them.
 
-    Match the included reference image's poster language: strong comic-style title at the top, small floating location text, and bottom action-result banners with readable typography. Use the reference for layout and typography treatment only. Update all scene content, labels, move names, and locations to reflect THIS turn's narrative and current battlefield positions.
+    Match the included reference image's poster language: strong comic-style title at the top, small floating location text, and bottom action-result banners with readable typography. Use the reference for layout and typography treatment only. Update all scene content, labels, move names, and locations to reflect THIS turn's narrative and current battlefield positions. Show each character's current equipment and weapons as described in the battle narrative — if a character just acquired a new weapon, they must be holding it.
 
     Do not invent terrain interactions that are not supported by the latest narrative or authoritative battlefield state. Do not place a combatant in water, waist-deep surf, or shoreline action unless the narrative or current map state explicitly puts them there. If one fighter is farther from the water or behind cover, keep that staging accurate instead of moving them for composition.`;
 
@@ -3572,7 +3598,7 @@ This battle image must ALWAYS include cinematic UI text overlays integrated into
       }
       return;
     }
-    socket.emit('enterArena', { unlimitedTurnTime: settingsRef.current.unlimitedTurnTime });
+    socket.emit('enterArena', { unlimitedTurnTime: settingsRef.current.unlimitedTurnTime, modelSettings: { charModel: settingsRef.current.charModel, explorationModel: settingsRef.current.explorationModel, battleModel: settingsRef.current.battleModel, botModel: settingsRef.current.botModel } });
   };
 
   const handleNewCharacter = () => {
@@ -3824,7 +3850,7 @@ Be creative and concise.`;
   const renderMenu = () => (
     <div className="flex-1 flex flex-col items-center p-6 gap-8 overflow-y-auto">
       <div className="text-center space-y-2">
-        <h1 className="text-3xl font-black text-duo-text tracking-tight">Arena Clash</h1>
+        <h1 className="text-4xl font-black text-duo-text tracking-tight">What If</h1>
         <p className="text-duo-gray-dark font-bold">Learn to fight. Forever.</p>
       </div>
 
@@ -4022,6 +4048,7 @@ Be creative and concise.`;
                     botProfile: selectedChar?.content,
                     botName: selectedChar?.name,
                     unlimitedTurnTime: settingsRef.current.unlimitedTurnTime,
+                    modelSettings: { charModel: settings.charModel, explorationModel: settings.explorationModel, battleModel: settings.battleModel, botModel: settings.botModel },
                   });
                 }}
                 disabled={!selectedBotCharacter}
@@ -5079,7 +5106,11 @@ Be creative and concise.`;
                 el.dataset.lastPinchDist = '';
                 el.dataset.lastPinchMidX = '';
                 el.dataset.lastPinchMidY = '';
-                if (Object.keys(pointers).length === 0) {
+                const remaining = Object.values(pointers);
+                if (remaining.length === 1) {
+                  // Transition from pinch to single-finger drag: reset drag origin to avoid snap
+                  mapDragRef.current = { dragging: true, lastX: remaining[0].x, lastY: remaining[0].y };
+                } else if (remaining.length === 0) {
                   mapDragRef.current.dragging = false;
                 }
               }}
@@ -5091,7 +5122,10 @@ Be creative and concise.`;
                 el.dataset.lastPinchDist = '';
                 el.dataset.lastPinchMidX = '';
                 el.dataset.lastPinchMidY = '';
-                if (Object.keys(pointers).length === 0) {
+                const remaining = Object.values(pointers);
+                if (remaining.length === 1) {
+                  mapDragRef.current = { dragging: true, lastX: remaining[0].x, lastY: remaining[0].y };
+                } else if (remaining.length === 0) {
                   mapDragRef.current.dragging = false;
                 }
               }}
@@ -5712,6 +5746,7 @@ Be creative and concise.`;
                     botProfile,
                     botName: bot.name,
                     unlimitedTurnTime: settingsRef.current.unlimitedTurnTime,
+                    modelSettings: { charModel: settingsRef.current.charModel, explorationModel: settingsRef.current.explorationModel, battleModel: settingsRef.current.battleModel, botModel: settingsRef.current.botModel },
                   });
                 }}
                 disabled={!character}

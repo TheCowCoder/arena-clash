@@ -960,6 +960,7 @@ async function startServer() {
     io.to(roomId).emit('roomPlayersUpdated', {
       players: room.players,
       phase: room.phase || 'battle',
+      modelSettings: room.modelSettings || null,
     });
   };
 
@@ -2924,6 +2925,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         phase: 'preview',
         history: [],
         battleMediaLogs: [],
+        modelSettings: data.modelSettings || null,
       };
 
       socket.join(roomId);
@@ -2996,6 +2998,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         arenaPreviewSeconds: typeof data?.arenaPreviewSeconds === 'number' ? data.arenaPreviewSeconds : undefined,
         arenaTweakSeconds: typeof data?.arenaTweakSeconds === 'number' ? data.arenaTweakSeconds : undefined,
         battleTurnSeconds: typeof data?.battleTurnSeconds === 'number' ? data.battleTurnSeconds : undefined,
+        modelSettings: data?.modelSettings || null,
       };
       socket.join("matchmaking_lobby");
       io.to("matchmaking_lobby").emit("queueUpdated", Object.values(matchmakingQueue));
@@ -3036,7 +3039,8 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
             mapState: buildArenaBattleMapState(roomPlayers),
             phase: 'preview',
             history: [],
-            battleMediaLogs: []
+            battleMediaLogs: [],
+            modelSettings: queueList[0].modelSettings || null,
           };
 
           startArenaPreparation(roomId);
@@ -3153,6 +3157,21 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       if (!botId) return;
       applyPlayerLockedAction(roomId, botId, data.action);
       autoLockPendingNpcAllies(roomId, room, data?.npcActions);
+    });
+
+    socket.on("updateRoomSettings", (data: { charModel?: string; explorationModel?: string; battleModel?: string; botModel?: string }) => {
+      const roomId = players[socket.id]?.room;
+      if (!roomId) return;
+      const room = rooms[roomId];
+      if (!room || room.host !== socket.id) return;
+      const validModels = ['gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash'];
+      const sanitized: Record<string, string> = {};
+      for (const key of ['charModel', 'explorationModel', 'battleModel', 'botModel'] as const) {
+        const val = (data as any)[key];
+        if (typeof val === 'string' && validModels.includes(val)) sanitized[key] = val;
+      }
+      room.modelSettings = { ...(room.modelSettings || {}), ...sanitized };
+      io.to(roomId).emit('roomSettingsUpdated', room.modelSettings);
     });
 
     socket.on("playerAction", (payload) => {
