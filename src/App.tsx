@@ -326,12 +326,6 @@ const extractTransformationCueForCombatant = (narrative: string, combatantName: 
   return null;
 };
 
-const buildBattleActionsLog = (roomPlayers: Record<string, any>): string => (
-  BATTLE_PLAYER_ACTIONS_PREFIX + Object.keys(roomPlayers)
-    .map(pid => `**${roomPlayers[pid].character.name}:** ${roomPlayers[pid].action}`)
-    .join('\n\n')
-);
-
 const appendBattleLogIfMissing = (logs: string[], entry: string): string[] => (
   logs.includes(entry) ? logs : [...logs, entry]
 );
@@ -366,17 +360,6 @@ const appendBattleImageResultLogs = (logs: string[], actorName: string, imageUrl
 const buildPendingBattleActionLog = (playerId: string, action: string): string => (
   `${BATTLE_PENDING_ACTION_PREFIX}${playerId}::${action}`
 );
-
-const buildTurnResolutionRequestKey = (room: any): string => {
-  if (typeof room?.resolutionRequestNonce === 'number') {
-    return `${room?.id || 'room'}::nonce:${room.resolutionRequestNonce}`;
-  }
-
-  const actions = Object.entries(room?.players || {})
-    .map(([id, player]: [string, any]) => `${id}:${player?.action || ''}:${player?.lockedIn ? '1' : '0'}`)
-    .join('|');
-  return `${room?.id || 'room'}::${actions}`;
-};
 
 const sanitizeBattleHistoryForJudge = (logs: string[]): string[] => logs.filter(log => (
   !log.startsWith('> **Judge\'s Thoughts:**')
@@ -1318,8 +1301,6 @@ export default function App() {
   const [localRetryRestartButtons, setLocalRetryRestartButtons] = useState<Record<string, string>>({});
   const [expandedThoughts, setExpandedThoughts] = useState<Set<number>>(new Set());
   const [expandedExplorationThoughts, setExpandedExplorationThoughts] = useState<Set<string>>(new Set());
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const activeTurnResolutionRequestKeyRef = useRef<string | null>(null);
   const retryRestartHandlersRef = useRef<Record<string, () => void>>({});
   const [isLockedIn, setIsLockedIn] = useState(false);
   const [roomTypingIds, setRoomTypingIds] = useState<string[]>([]);
@@ -1753,11 +1734,6 @@ export default function App() {
     const handleCharacterSynced = () => setIsSynced(true);
     const handleDisconnect = (reason: string) => {
       appendBattleTraceEvent('socket_disconnect', { reason, roomId: roomIdRef.current, gameState: gameStateRef.current });
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-        abortControllerRef.current = null;
-      }
-      activeTurnResolutionRequestKeyRef.current = null;
       closeFullMap();
       setIsSynced(false);
       if (reason === 'io server disconnect') {
@@ -2493,509 +2469,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       }
     });
 
-    socket.on('requestTurnResolution', async (room) => {
-      if (socket.id !== room.host) return;
-
-      const resolutionRequestKey = buildTurnResolutionRequestKey(room);
-      if (activeTurnResolutionRequestKeyRef.current) {
-        appendBattleTraceEvent('request_turn_resolution_ignored_inflight', {
-          roomId: room.id,
-          activeRequestKey: activeTurnResolutionRequestKeyRef.current,
-          incomingRequestKey: resolutionRequestKey,
-          reissue: !!room.resolutionRequestReissue,
-        });
-        return;
-      }
-      activeTurnResolutionRequestKeyRef.current = resolutionRequestKey;
-
-      appendBattleTraceEvent('request_turn_resolution', {
-        roomId: room.id,
-        playerCount: Object.keys(room.players || {}).length,
-        hostId: room.host,
-        battleLogCount: battleLogsRef.current.length,
-        requestKey: resolutionRequestKey,
-        reissue: !!room.resolutionRequestReissue,
-      });
-      
-      try {
-        if (abortControllerRef.current) {
-          abortControllerRef.current.abort();
-        }
-        abortControllerRef.current = new AbortController();
-        let signal = abortControllerRef.current.signal;
-        let battleStallAborted = false;
-
-        const playerIds = Object.keys(room.players);
-        const actionsLog = buildBattleActionsLog(room.players);
-        const baseLogs = appendBattleLogIfMissing(battleLogsRef.current, actionsLog);
-        setBattleLogs(prev => appendBattleLogIfMissing(prev, actionsLog));
-
-        const judgeHistoryLogs = sanitizeBattleHistoryForJudge(baseLogs);
-        const recentNarrativeLogs = extractRecentBattleNarrative(judgeHistoryLogs);
-        const fullLogText = judgeHistoryLogs.join('\n\n');
-        const logLines = fullLogText.split('\n');
-        const totalLines = logLines.length;
-
-        logBattleDebug('judge_history_prepared', {
-          roomId: room.id,
-          baseLogCount: baseLogs.length,
-          judgeHistoryCount: judgeHistoryLogs.length,
-          recentNarrativeCount: recentNarrativeLogs.length,
-          totalLines,
-          recentNarrativeTail: recentNarrativeLogs.map(summarizeBattleLogEntry),
-        });
-
-        let profiles = "";
-        for (const pid of playerIds) {
-          const pData = room.players[pid];
-          profiles += `Profile for ${pData.character.name}:\n${pData.character.profileMarkdown}\n\n`;
-        }
-
-        const sysPromptRes = await fetch('/api/prompts/battle_judge.txt');
-        const sysPrompt = await sysPromptRes.text();
-        const fullSysPrompt = sysPrompt + "\n\n" + profiles;
-
-        let prompt = `BATTLE STATE (TURN START):\n`;
-        for (const pid of playerIds) {
-          const pData = room.players[pid];
-          prompt += `Player (${pData.character.name}):\nHP: ${pData.character.hp}, Mana: ${pData.character.mana}\nAction: ${pData.action}\n\n`;
-        }
-        prompt += buildBattleMapContext(worldDataRef.current, room.mapState, room.players);
-        if (recentNarrativeLogs.length > 0) {
-          prompt += `LATEST RESOLVED BATTLE NARRATIVE:\n${recentNarrativeLogs.join('\n\n')}\n\n`;
-        }
-        prompt += 'The BATTLE MAP STATE above is authoritative. Do not invent new zones, do not remap the battlefield, and do not call any zone-setup tool. Treat the provided named locations and connections as the active combat zones.\n';
-        prompt += `The battle log currently has ${totalLines} lines. You can use the read_battle_history tool to read it if you need context from previous turns. Otherwise, resolve the turn simultaneously. When you call submit_battle_result, include the full markdown turn narration in battleLog. If an action is vague, resolve it as the simplest plausible action for the current distance instead of over-interpreting it.`;
-
-        const readBattleHistory = {
-        name: "read_battle_history",
-        description: "Read the battle history markdown log. Provide start and end lines to read a specific section. The log contains all previous turns.",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            startLine: { type: "INTEGER", description: "The line number to start reading from (1-indexed)." },
-            endLine: { type: "INTEGER", description: "The line number to end reading at (inclusive)." }
-          },
-          required: ["startLine", "endLine"]
-        }
-      };
-
-        const submitBattleResult = {
-        name: "submit_battle_result",
-        description: "Submit the updated character states and final markdown battle log after resolving the turn. Always include the full turn narration in battleLog. Include battlePositions whenever movement, pursuit, swimming, sailing, or fleeing changes exact map coordinates.",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            battleLog: {
-              type: "STRING",
-              description: "The complete markdown narration for this turn. Include the full battle log text that should be shown to players.",
-            },
-            characterStates: {
-              type: "STRING",
-              description: "JSON string of character states. Format: {\"CharName1\": {\"hp\": number, \"mana\": number, \"profileMarkdown\": \"optional updated markdown\"}, \"CharName2\": {\"hp\": number, \"mana\": number}}"
-            },
-            battlePositions: {
-              type: "STRING",
-              description: "Optional JSON string of per-character map positions. Format: {\"CharName1\": {\"x\": number, \"y\": number, \"locationId\": \"nearest_or_tactical_location_id\"}, \"CharName2\": {\"x\": number, \"y\": number, \"locationId\": \"...\"}}. Update this every turn when movement changes positions, including water travel between islands."
-            }
-          },
-          required: ["battleLog", "characterStates"]
-        }
-      };
-
-        const aiClient = getAIClient();
-        let contents: any[] = [{ role: 'user', parts: [{ text: prompt }] }];
-        let hasEmittedStart = false;
-        let finalThoughts = "";
-        let finalAnswer = "";
-
-        let attempts = 0;
-        clearBattleStatusLog('battle-retry');
-        setBattle503RetryAttempt(0);
-
-        const buildFallbackBattleNarrative = () => {
-        const submittedActions = Object.values(room.players)
-          .map((player: any) => `- **${player.character.name}:** ${player.action || 'No action submitted.'}`)
-          .join('\n');
-        return [
-          '⚠️ The judge returned a state update without narrative text.',
-          '',
-          '**Submitted actions**',
-          submittedActions,
-        ].join('\n');
-      };
-
-        while (true) {
-        if (signal.aborted) break;
-        setBattleError(null);
-        setRetryAttempt(attempts);
-        appendBattleTraceEvent('resolver_attempt_started', {
-          roomId: room.id,
-          attempt: attempts,
-          model: settingsRef.current.battleModel,
-        });
-
-        const BATTLE_STREAM_STALL_MS = 120_000;
-        let battleStreamStallTimer: ReturnType<typeof setTimeout> | null = null;
-        const clearBattleStallTimer = () => { if (battleStreamStallTimer) { clearTimeout(battleStreamStallTimer); battleStreamStallTimer = null; } };
-        const resetBattleStallTimer = () => {
-          clearBattleStallTimer();
-          battleStreamStallTimer = setTimeout(() => {
-            console.warn('[BattleStream] No chunk received in 120s — aborting stalled stream');
-            battleStallAborted = true;
-            abortControllerRef.current?.abort();
-          }, BATTLE_STREAM_STALL_MS);
-        };
-
-        try {
-          while (true) {
-            if (signal.aborted) break;
-            resetBattleStallTimer();
-            appendBattleTraceEvent('resolver_stream_requested', {
-              roomId: room.id,
-              attempt: attempts,
-              contentsCount: contents.length,
-              model: settingsRef.current.battleModel,
-            });
-            const responseStream = await aiClient.models.generateContentStream({
-              model: settingsRef.current.battleModel,
-              contents: contents,
-              config: {
-                systemInstruction: fullSysPrompt,
-                temperature: 1.5,
-                thinkingConfig: {
-                  includeThoughts: true,
-                  thinkingBudget: 4096
-                },
-                tools: [{ functionDeclarations: [readBattleHistory as any, submitBattleResult as any] }],
-                abortSignal: signal,
-              },
-            });
-
-            let hasToolCall = false;
-            let toolCallPart = null;
-            let modelParts = [];
-            let streamedThoughts = "";
-            let streamedAnswer = "";
-            let emittedFirstChunk = false;
-
-            resetBattleStallTimer();
-            appendBattleTraceEvent('resolver_stream_connected', {
-              roomId: room.id,
-              attempt: attempts,
-              model: settingsRef.current.battleModel,
-            });
-            let chunkCount = 0;
-            for await (const chunk of responseStream) {
-              chunkCount++;
-              resetBattleStallTimer();
-              if (signal.aborted) break;
-              const parts = chunk.candidates?.[0]?.content?.parts || [];
-              if (!emittedFirstChunk) {
-                appendBattleTraceEvent('resolver_first_chunk', {
-                  roomId: room.id,
-                  attempt: attempts,
-                  partTypes: parts.map((part: any) => part.functionCall ? 'functionCall' : part.thought ? 'thought' : part.text ? 'text' : 'unknown'),
-                });
-                emittedFirstChunk = true;
-              }
-              console.log(`[BattleStream] chunk #${chunkCount}, parts: ${parts.length}, types: [${parts.map((p: any) => p.functionCall ? 'functionCall' : p.thought ? 'thought' : p.text ? 'text' : 'unknown').join(', ')}]`);
-              for (const part of parts) {
-                modelParts.push(part);
-                if (part.functionCall) {
-                  hasToolCall = true;
-                  toolCallPart = part;
-                } else if (!hasToolCall) {
-                  const p = part as any;
-                  const isThought = !!p.thought;
-                  const text = typeof p.thought === 'string' ? p.thought : (p.text || "");
-
-                  if (text) {
-                    if (!hasEmittedStart) {
-                      socket.emit('streamTurnResolutionStart');
-                      appendBattleTraceEvent('stream_start_emitted', {
-                        roomId: room.id,
-                        attempt: attempts,
-                      });
-                      hasEmittedStart = true;
-                    }
-                    
-                    if (isThought) {
-                      streamedThoughts += text;
-                    } else {
-                      streamedAnswer += text;
-                    }
-                    
-                    // With native tool calling, the answer text IS the battle log directly (no XML tags)
-                    let displayThoughts = finalThoughts + streamedThoughts;
-                    let displayAnswer = (finalAnswer + streamedAnswer).trim();
-                    
-                    socket.emit('streamTurnResolutionChunk', { type: 'thought', text: "REFRESH:" + displayThoughts });
-                    socket.emit('streamTurnResolutionChunk', { type: 'answer', text: "REFRESH:" + displayAnswer });
-                  }
-                }
-              }
-            }
-            clearBattleStallTimer();
-            console.log(`[BattleStream] Stream ended. chunkCount=${chunkCount}, hasToolCall=${hasToolCall}, signal.aborted=${signal.aborted}, finalAnswer.length=${finalAnswer.length + streamedAnswer.length}, finalThoughts.length=${finalThoughts.length + streamedThoughts.length}`);
-            if (signal.aborted) break;
-
-            finalThoughts += streamedThoughts;
-            finalAnswer += streamedAnswer;
-
-            if (hasToolCall && toolCallPart) {
-              const functionCall = toolCallPart.functionCall;
-              console.log(`[BattleStream] Tool call: ${functionCall?.name}`, functionCall?.args ? Object.keys(functionCall.args) : 'no args');
-              if (!functionCall) {
-                continue;
-              }
-
-              const funcName = functionCall.name;
-              const args = functionCall.args as any;
-              
-              if (funcName === 'read_battle_history') {
-                const start = Math.max(1, args.startLine || 1);
-                const end = Math.min(totalLines, args.endLine || totalLines);
-                appendBattleTraceEvent('battle_history_tool_called', {
-                  roomId: room.id,
-                  attempt: attempts,
-                  startLine: start,
-                  endLine: end,
-                });
-                const resultText = logLines.slice(start - 1, end).join('\n');
-                socket.emit('streamTurnResolutionChunk', {
-                  type: 'tool',
-                  text: `⚙️ Judge called read_battle_history(${start}, ${end})`,
-                });
-                
-                contents.push({ role: 'model', parts: modelParts });
-                contents.push({
-                  role: 'user',
-                  parts: [{
-                    functionResponse: {
-                      name: "read_battle_history",
-                      response: { result: resultText }
-                    }
-                  }]
-              });
-              // Loop again to let the model continue
-              } else if (funcName === 'submit_battle_result') {
-                // Native tool call for battle state update
-                let newState = null;
-                try {
-                  newState = typeof args.characterStates === 'string' 
-                    ? JSON.parse(args.characterStates) 
-                    : args.characterStates;
-                } catch (e) {
-                  console.error("Failed to parse battle state from tool call", e);
-                }
-
-                let battlePositionUpdates = null;
-                try {
-                  battlePositionUpdates = typeof args.battlePositions === 'string'
-                    ? JSON.parse(args.battlePositions)
-                    : args.battlePositions;
-                } catch (e) {
-                  console.error("Failed to parse battle positions from tool call", e);
-                }
-
-                const resolvedMapState = mergeBattlePositionUpdates(
-                  worldDataRef.current,
-                  room.mapState,
-                  battlePositionUpdates,
-                  room.players,
-                );
-                
-                const toolBattleLog = typeof args.battleLog === 'string' ? args.battleLog.trim() : '';
-                let thoughts = finalThoughts.trim();
-                let markdownLog = toolBattleLog || finalAnswer.trim() || buildFallbackBattleNarrative();
-                appendBattleTraceEvent('submit_turn_resolution_emitted', {
-                  roomId: room.id,
-                  attempt: attempts,
-                  viaTool: true,
-                  hasState: !!newState,
-                  hasMapState: !!resolvedMapState,
-                  battleLogLength: markdownLog.length,
-                  thoughtsLength: thoughts.length,
-                });
-                
-                socket.emit('submitTurnResolution', {
-                  log: markdownLog,
-                  thoughts: thoughts,
-                  state: newState,
-                  mapState: resolvedMapState ?? room.mapState,
-                });
-                clearBattleStatusLog('battle-retry');
-                setRetryAttempt(0);
-                setBattle503RetryAttempt(0);
-                socket.emit('battleRetryStatus', { attempt: 0 });
-                setBattleError(null);
-                return;
-              }
-            } else {
-              // Done — no tool call, extract state from text as fallback
-              console.log(`[BattleStream] No tool call — using text fallback. finalAnswer.length=${(finalAnswer + streamedAnswer).trim().length}`);
-              const combinedOutput = finalThoughts + "\n" + finalAnswer;
-              
-              const stateMatch = combinedOutput.match(/<BATTLE_STATE>([\s\S]*?)(?:<\/BATTLE_STATE>|$)/);
-              let newState = null;
-              if (stateMatch) {
-                try {
-                  newState = JSON.parse(stateMatch[1]);
-                } catch (e) {
-                  console.error("Failed to parse battle state", e);
-                }
-              }
-
-              const positionMatch = combinedOutput.match(/<BATTLE_POSITIONS>([\s\S]*?)(?:<\/BATTLE_POSITIONS>|$)/);
-              let battlePositionUpdates = null;
-              if (positionMatch) {
-                try {
-                  battlePositionUpdates = JSON.parse(positionMatch[1]);
-                } catch (e) {
-                  console.error("Failed to parse battle positions", e);
-                }
-              }
-
-              const resolvedMapState = mergeBattlePositionUpdates(
-                worldDataRef.current,
-                room.mapState,
-                battlePositionUpdates,
-                room.players,
-              );
-
-              let thoughts = finalThoughts.trim();
-              let markdownLog = finalAnswer
-                .replace(/<BATTLE_STATE>[\s\S]*?(?:<\/BATTLE_STATE>|$)/, "")
-                .replace(/<BATTLE_POSITIONS>[\s\S]*?(?:<\/BATTLE_POSITIONS>|$)/, "")
-                .trim() || buildFallbackBattleNarrative();
-              appendBattleTraceEvent('submit_turn_resolution_emitted', {
-                roomId: room.id,
-                attempt: attempts,
-                viaTool: false,
-                hasState: !!newState,
-                hasMapState: !!resolvedMapState,
-                battleLogLength: markdownLog.length,
-                thoughtsLength: thoughts.length,
-              });
-              
-              socket.emit('submitTurnResolution', {
-                log: markdownLog,
-                thoughts: thoughts,
-                state: newState,
-                mapState: resolvedMapState ?? room.mapState,
-              });
-              clearBattleStatusLog('battle-retry');
-              setRetryAttempt(0);
-              setBattle503RetryAttempt(0);
-              socket.emit('battleRetryStatus', { attempt: 0 });
-              setBattleError(null);
-              return;
-            }
-          }
-        } catch (error: any) {
-          clearBattleStallTimer();
-          console.error(`[BattleStream] Caught error: name=${error.name}, message=${error.message?.substring(0, 200)}, battleStallAborted=${battleStallAborted}`);
-          // Stall timer abort: retry with a fresh AbortController
-          if (error.name === 'AbortError' && battleStallAborted) {
-            battleStallAborted = false;
-            attempts++;
-            console.warn(`[BattleStream] Stall timeout — retrying (attempt ${attempts})`);
-            appendBattleTraceEvent('resolver_stream_stalled', {
-              roomId: room.id,
-              attempt: attempts,
-              retryDelaySeconds: getAIRetryDelaySeconds(attempts),
-            });
-            abortControllerRef.current = new AbortController();
-            signal = abortControllerRef.current.signal;
-            const delay = getAIRetryDelaySeconds(attempts);
-            setRetryAttempt(attempts);
-            setBattle503RetryAttempt(0);
-            socket.emit('battleRetryStatus', { attempt: 0 });
-            setBattleError(`Model stream stalled. Retrying in ${delay}s...`);
-            upsertBattleStatusLog('battle-retry', `⚠️ Model stream stalled. Retrying in **${delay}s**. Attempt **#${attempts}**...`);
-            await new Promise(resolve => setTimeout(resolve, delay * 1000));
-            continue;
-          }
-          if (error.name === 'AbortError') {
-            appendBattleTraceEvent('resolver_aborted', {
-              roomId: room.id,
-              attempt: attempts,
-            });
-            setBattle503RetryAttempt(0);
-            socket.emit('battleRetryStatus', { attempt: 0 });
-            return;
-          }
-          console.error("Error resolving turn:", error);
-
-          const errorInfo = classifyAIError(error);
-
-          if (errorInfo.retryable) {
-            attempts++;
-            if (attempts > 8) {
-              const formattedError = formatAIError(errorInfo);
-              appendBattleTraceEvent('resolver_retry_gave_up', {
-                roomId: room.id,
-                attempt: attempts,
-                label: errorInfo.label,
-                statusCode: errorInfo.statusCode ?? null,
-                statusText: errorInfo.statusText ?? null,
-              });
-              socket.emit('error', `Turn resolution failed after ${attempts} attempts (Model: ${settingsRef.current.battleModel}). ${formattedError}`);
-              setBattleError(formattedError);
-              upsertBattleStatusLog('battle-retry', `⚠️ Gave up after ${attempts} attempts: ${formattedError}`);
-              setRetryAttempt(0);
-              setBattle503RetryAttempt(0);
-              socket.emit('battleRetryStatus', { attempt: 0 });
-              break;
-            }
-            const delay = getAIRetryDelaySeconds(attempts, errorInfo.suggestedRetrySeconds);
-            const delaySec = Math.round(delay);
-            appendBattleTraceEvent('resolver_retry_scheduled', {
-              roomId: room.id,
-              attempt: attempts,
-              label: errorInfo.label,
-              delaySeconds: delaySec,
-              statusCode: errorInfo.statusCode ?? null,
-              statusText: errorInfo.statusText ?? null,
-            });
-            setRetryAttempt(attempts);
-            setBattle503RetryAttempt(isServiceUnavailableRetry(errorInfo) ? attempts : 0);
-            socket.emit('battleRetryStatus', isServiceUnavailableRetry(errorInfo)
-              ? { attempt: attempts, label: errorInfo.label, delay: delaySec, statusCode: errorInfo.statusCode, statusText: errorInfo.statusText }
-              : { attempt: 0 });
-            setBattleError(`${errorInfo.label}. Retrying in ${delaySec}s...`);
-            upsertBattleStatusLog('battle-retry', `⚠️ ${errorInfo.label}. Retrying in **${delaySec}s**. Attempt **#${attempts}**...`);
-            await new Promise(resolve => setTimeout(resolve, delay * 1000));
-            continue;
-          }
-
-          const formattedError = formatAIError(errorInfo);
-          appendBattleTraceEvent('resolver_failed', {
-            roomId: room.id,
-            attempt: attempts,
-            label: errorInfo.label,
-            statusCode: errorInfo.statusCode ?? null,
-            statusText: errorInfo.statusText ?? null,
-          });
-          socket.emit('error', `Turn resolution failed (Model: ${settingsRef.current.battleModel}). ${formattedError}`);
-          setBattleError(formattedError);
-          upsertBattleStatusLog('battle-retry', `⚠️ Battle resolution error: ${formattedError}`);
-          setRetryAttempt(0);
-          setBattle503RetryAttempt(0);
-          socket.emit('battleRetryStatus', { attempt: 0 });
-          break;
-        }
-        }
-      } finally {
-        if (activeTurnResolutionRequestKeyRef.current === resolutionRequestKey) {
-          activeTurnResolutionRequestKeyRef.current = null;
-        }
-      }
-    });
-
     socket.on('turnResolved', (data) => {
-      activeTurnResolutionRequestKeyRef.current = null;
       appendBattleTraceEvent('turn_resolved', {
         roomId: roomIdRef.current,
         playerCount: Object.keys(data.players || {}).length,
@@ -3074,15 +2548,10 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     });
 
     socket.on('battleEndedByInactivity', (data: { log: string }) => {
-      activeTurnResolutionRequestKeyRef.current = null;
       appendBattleTraceEvent('battle_ended_by_inactivity', {
         roomId: roomIdRef.current,
         logPreview: summarizeBattleLogEntry(data.log),
       });
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-        abortControllerRef.current = null;
-      }
 
       setBattleLogs(prev => [...removePendingBattleActionLogs(removeBattleStreamPlaceholders(prev)), data.log]);
       setBattleError(null);
@@ -3224,9 +2693,6 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       closeFullMap();
       setBattle503RetryAttempt(0);
       setBattleLogs(prev => [...prev, '**Opponent disconnected.** You win by default!']);
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
       setArenaPreparation(null);
       setRoomTypingIds([]);
       setLocalRoomTypingIds([]);
@@ -3578,7 +3044,6 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       socket.off('battleActionsSubmitted');
       socket.off('typingStatusUpdated');
       socket.off('playerLockedIn');
-      socket.off('requestTurnResolution');
       socket.off('turnResolved');
       socket.off('battleEndedByInactivity');
       socket.off('battleRetryStatus');
