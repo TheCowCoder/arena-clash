@@ -356,11 +356,203 @@ async function startServer() {
     }
   });
 
+  const buildAIRequestConfig = (rawConfig: any, abortSignal?: AbortSignal) => {
+    const config: Record<string, any> = {};
+
+    if (typeof rawConfig?.systemInstruction === 'string' && rawConfig.systemInstruction.trim()) {
+      config.systemInstruction = rawConfig.systemInstruction;
+    }
+    if (typeof rawConfig?.temperature === 'number' && Number.isFinite(rawConfig.temperature)) {
+      config.temperature = rawConfig.temperature;
+    }
+    if (rawConfig?.thinkingConfig && typeof rawConfig.thinkingConfig === 'object') {
+      config.thinkingConfig = rawConfig.thinkingConfig;
+    }
+    if (Array.isArray(rawConfig?.tools)) {
+      config.tools = rawConfig.tools;
+    }
+    if (Array.isArray(rawConfig?.responseModalities)) {
+      config.responseModalities = rawConfig.responseModalities.filter((entry: unknown) => typeof entry === 'string');
+    }
+    if (typeof rawConfig?.topP === 'number' && Number.isFinite(rawConfig.topP)) {
+      config.topP = rawConfig.topP;
+    }
+    if (typeof rawConfig?.topK === 'number' && Number.isFinite(rawConfig.topK)) {
+      config.topK = rawConfig.topK;
+    }
+    if (typeof rawConfig?.candidateCount === 'number' && Number.isFinite(rawConfig.candidateCount)) {
+      config.candidateCount = rawConfig.candidateCount;
+    }
+    if (typeof rawConfig?.maxOutputTokens === 'number' && Number.isFinite(rawConfig.maxOutputTokens)) {
+      config.maxOutputTokens = rawConfig.maxOutputTokens;
+    }
+    if (abortSignal) {
+      config.abortSignal = abortSignal;
+    }
+
+    return config;
+  };
+
+  const buildAIRequestPayload = (body: any, abortSignal?: AbortSignal) => {
+    if (typeof body?.model !== 'string' || !body.model.trim()) {
+      throw new Error('Model is required');
+    }
+
+    return {
+      model: body.model,
+      contents: body.contents,
+      config: buildAIRequestConfig(body.config, abortSignal),
+    };
+  };
+
+  const AI_RETRY_WINDOW_MS = 120_000;
+
+  const get503FallbackModel = (model: string, errorInfo?: { statusCode?: number; statusText?: string }, attempt = 0) => {
+    const isUnavailable = errorInfo?.statusCode === 503 || errorInfo?.statusText === 'UNAVAILABLE';
+    if (!isUnavailable || attempt < 1) return model;
+    if (model === 'gemini-2.5-pro') return 'gemini-2.5-flash';
+    if (model === 'gemini-3.1-pro-preview') return 'gemini-3-flash-preview';
+    return model;
+  };
+
+  const sleepMs = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  const getServerSideApiKey = (value: unknown) => {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    return process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+  };
+
+  const serializeAIError = (error: unknown) => {
+    if ((error as any)?.retryWindowExpired) {
+      return {
+        error: (error as any)?.label || 'Gemini is temporarily unavailable',
+        detail: (error as any)?.detail || 'Retry window expired',
+        retryable: false,
+        retryWindowExpired: true,
+        message: (error as any)?.message || 'Retry window expired',
+      };
+    }
+
+    const errorInfo = classifyAIError(error);
+    return {
+      error: errorInfo.label,
+      detail: errorInfo.detail,
+      retryable: errorInfo.retryable,
+      statusCode: errorInfo.statusCode,
+      statusText: errorInfo.statusText,
+      suggestedRetrySeconds: errorInfo.suggestedRetrySeconds,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  };
+
+  const generateContentWithRetryWindow = async (body: any, abortSignal: AbortSignal) => {
+    const apiKey = getServerSideApiKey(body?.apiKey);
+    if (!apiKey) {
+      const missingKey: any = new Error('Gemini API key is not configured');
+      missingKey.label = 'Gemini API key is not configured';
+      throw missingKey;
+    }
+
+    const aiClient = createAIClient(apiKey);
+    const startedAt = Date.now();
+    let attempts = 0;
+    let lastRetryError: { statusCode?: number; statusText?: string } | undefined;
+
+    while (true) {
+      if (abortSignal.aborted) {
+        throw new Error('Aborted');
+      }
+
+      try {
+        const requestPayload = buildAIRequestPayload({
+          ...body,
+          model: get503FallbackModel(body?.model, lastRetryError, attempts),
+        }, abortSignal);
+        return await aiClient.models.generateContent(requestPayload as any);
+      } catch (error) {
+        if (abortSignal.aborted) {
+          throw error;
+        }
+
+        const errorInfo = classifyAIError(error);
+        if (!errorInfo.retryable) {
+          throw error;
+        }
+
+        attempts += 1;
+        lastRetryError = errorInfo;
+        const remainingMs = AI_RETRY_WINDOW_MS - (Date.now() - startedAt);
+        if (remainingMs <= 0) {
+          const expiredError: any = new Error(`${errorInfo.label}. Retry window expired.`);
+          expiredError.label = errorInfo.label;
+          expiredError.detail = errorInfo.detail;
+          expiredError.retryWindowExpired = true;
+          throw expiredError;
+        }
+
+        const retryDelaySeconds = Math.min(
+          getAIRetryDelaySeconds(attempts, errorInfo.suggestedRetrySeconds),
+          Math.max(1, remainingMs / 1000),
+        );
+        await sleepMs(retryDelaySeconds * 1000);
+      }
+    }
+  };
+
+  app.post('/api/ai/generate', async (req, res) => {
+    const abortController = new AbortController();
+    req.on('close', () => abortController.abort());
+
+    try {
+      const response = await generateContentWithRetryWindow(req.body, abortController.signal);
+      res.json({
+        text: typeof (response as any)?.text === 'string' ? (response as any).text : '',
+        candidates: (response as any)?.candidates || [],
+      });
+    } catch (error) {
+      const payload = serializeAIError(error);
+      res.status(payload.statusCode || 500).json(payload);
+    }
+  });
+
+  app.post('/api/ai/generate-stream', async (req, res) => {
+    const apiKey = getServerSideApiKey(req.body?.apiKey);
+    if (!apiKey) {
+      res.status(400).json({ error: 'Gemini API key is not configured' });
+      return;
+    }
+
+    const abortController = new AbortController();
+    req.on('close', () => abortController.abort());
+
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+
+    try {
+      const aiClient = createAIClient(apiKey);
+      const requestPayload = buildAIRequestPayload(req.body, abortController.signal);
+      const response = await aiClient.models.generateContentStream(requestPayload as any);
+      for await (const chunk of response as any) {
+        if (abortController.signal.aborted) {
+          break;
+        }
+        res.write(`${JSON.stringify({ candidates: chunk?.candidates || [] })}\n`);
+      }
+      res.end();
+    } catch (error) {
+      const payload = serializeAIError(error);
+      res.write(`${JSON.stringify({ error: payload })}\n`);
+      res.end();
+    }
+  });
+
   // Socket.io logic
   interface QueuePlayer {
     id: string;
     character: any;
     isReady: boolean;
+    apiKey?: string;
     unlimitedTurnTime?: boolean;
     arenaPreviewSeconds?: number;
     arenaTweakSeconds?: number;
@@ -378,6 +570,11 @@ async function startServer() {
   const ARENA_PREVIEW_SECONDS = 15;
   const ARENA_TWEAK_SECONDS = 120;
   const ALWAYS_UNLIMITED_TURN_TIME = true;
+  const BATTLE_RETRY_WINDOW_MS = 120_000;
+  const BATTLE_STREAM_THOUGHTS_PREFIX = 'STREAMING_THOUGHTS_';
+  const BATTLE_STREAM_ANSWER_PREFIX = 'STREAMING_ANSWER_';
+  const BATTLE_PENDING_ACTION_PREFIX = 'PENDING_PLAYER_ACTION_';
+  const BATTLE_PLAYER_ACTIONS_PREFIX = 'PLAYER_ACTIONS_';
   const SESSION_RECONNECT_GRACE_MS = 45_000;
   const socketSessionIds: Record<string, string> = {};
   const sessionSocketIds: Record<string, string> = {};
@@ -507,6 +704,9 @@ async function startServer() {
     if (room.awaitingTurnResolution && !isReissue) {
       return;
     }
+    if (room.battleResolutionTaskActive) {
+      return;
+    }
 
     const now = Date.now();
     if (typeof room.lastResolutionRequestAt === 'number' && now - room.lastResolutionRequestAt < 3_000) {
@@ -521,11 +721,7 @@ async function startServer() {
     }
 
     room.resolutionRequestNonce = (room.resolutionRequestNonce || 0) + 1;
-    io.to(room.host).emit("requestTurnResolution", {
-      ...room,
-      resolutionRequestNonce: room.resolutionRequestNonce,
-      resolutionRequestReissue: isReissue,
-    });
+    void runBattleTurnResolution(roomId, { reissue: isReissue });
   }
 
   function endBattleDueToInactivity(roomId: string, room: { players: Record<string, any> }) {
@@ -897,6 +1093,678 @@ async function startServer() {
       zones: nextMapState?.zones ?? previousMapState.zones,
       combatantZones: nextMapState?.combatantZones ?? previousMapState.combatantZones,
     };
+  };
+
+  const getWorldIsland = (islandId: string) => (
+    worldData?.islands?.find((entry: any) => entry.id === islandId) || null
+  );
+
+  const appendBattleLogIfMissing = (logs: string[], entry: string): string[] => (
+    logs.includes(entry) ? logs : [...logs, entry]
+  );
+
+  const sanitizeBattleHistoryForJudge = (logs: string[]): string[] => logs.filter(log => (
+    !log.startsWith('> **Judge\'s Thoughts:**')
+    && !log.startsWith(BATTLE_STREAM_THOUGHTS_PREFIX)
+    && !log.startsWith(BATTLE_STREAM_ANSWER_PREFIX)
+    && !log.startsWith(BATTLE_PENDING_ACTION_PREFIX)
+    && !log.startsWith('STATUS_')
+  ));
+
+  const extractRecentBattleNarrative = (logs: string[]): string[] => logs.filter(log => (
+    !log.startsWith(BATTLE_PLAYER_ACTIONS_PREFIX)
+    && !log.startsWith('NPC_ALLY_ACTION_')
+    && log !== '**Match Found!** The battle begins.'
+  )).slice(-2);
+
+  const buildBattleMapContext = (mapState?: BattleMapState, roomPlayers?: Record<string, any>) => {
+    if (!worldData || !mapState || mapState.players.length === 0) return '';
+
+    let context = 'BATTLE MAP STATE:\n';
+    for (const player of mapState.players) {
+      const location = getWorldLocation(player.locationId);
+      const island = getWorldIsland(location?.islandId);
+      const playerName = roomPlayers?.[player.id]?.character?.name || player.name;
+      context += `- ${playerName} is at grid (${player.x.toFixed(1)}, ${player.y.toFixed(1)}) on ${island?.name || location?.islandId || 'an unknown island'} near ${location?.name || player.locationId}. Connected routes: ${(location?.connections || []).join(', ') || 'none'}.\n`;
+    }
+
+    if (mapState.players.length >= 2) {
+      for (let index = 0; index < mapState.players.length; index += 1) {
+        for (let innerIndex = index + 1; innerIndex < mapState.players.length; innerIndex += 1) {
+          const left = mapState.players[index];
+          const right = mapState.players[innerIndex];
+          const leftLocation = getWorldLocation(left.locationId);
+          const rightLocation = getWorldLocation(right.locationId);
+          const distance = getLocationHopDistance(left.locationId, right.locationId);
+          const leftName = roomPlayers?.[left.id]?.character?.name || left.name;
+          const rightName = roomPlayers?.[right.id]?.character?.name || right.name;
+          if (leftLocation?.islandId && rightLocation?.islandId && leftLocation.islandId !== rightLocation.islandId) {
+            context += `- ${leftName} and ${rightName} are on different islands with water between them.\n`;
+          }
+          const distanceLabel = distance === 0
+            ? 'sharing the same location'
+            : distance === 1
+              ? 'one move apart'
+              : Number.isFinite(distance)
+                ? `${distance} moves apart`
+                : 'positionally disconnected';
+          context += `- ${leftName} and ${rightName} are ${distanceLabel}.\n`;
+        }
+      }
+    }
+
+    context += '\nARENA MOVEMENT RULES:\n';
+    context += '- Current positions are authoritative at turn start. Resolve any new movement this turn by returning updated battlePositions in the tool call.\n';
+    context += '- Water between islands is traversable. Swimming or sailing can move fighters to fractional x/y coordinates between named locations.\n';
+    context += '- If fighters share a location, melee, grapples, and close-range attacks can connect normally.\n';
+    context += '- If fighters are one move apart, melee must spend the turn closing distance or chasing before it can land. Ranged pressure and spells may still connect with positioning tradeoffs.\n';
+    context += '- If fighters are two or more moves apart, melee cannot land this turn unless the action is entirely about pursuit. Favor ranged attacks, traps, mobility, scouting, or escape.\n';
+    context += '- Use chase, flee, pursuit, and terrain-aware narration naturally in the resolution.\n';
+    context += '- When movement happens, update exact x/y positions so the minimap reflects mid-route travel accurately.\n';
+
+    return context;
+  };
+
+  const mergeBattlePositionUpdates = (
+    currentMapState: BattleMapState | undefined,
+    positionUpdates: Record<string, { x?: number; y?: number; locationId?: string }> | null | undefined,
+    roomPlayers: Record<string, any>,
+  ): BattleMapState | undefined => {
+    if (!currentMapState || !positionUpdates) return currentMapState;
+
+    const gridWidth = worldData?.meta?.gridSize?.width ?? 0;
+    const gridHeight = worldData?.meta?.gridSize?.height ?? 0;
+    const discoveredLocations = new Set(currentMapState.discoveredLocations);
+    const clampCoordinate = (value: number, max: number) => (
+      max > 0 ? Math.min(max, Math.max(0, value)) : value
+    );
+
+    const applyUpdate = <T extends { id: string; name: string; locationId: string; x: number; y: number }>(
+      entity: T,
+      preferredName?: string,
+    ) => {
+      const update = positionUpdates[preferredName || entity.name] || positionUpdates[entity.name] || positionUpdates[entity.id];
+      if (!update) return entity;
+
+      const nextLocationId = typeof update.locationId === 'string' && update.locationId.trim()
+        ? update.locationId
+        : entity.locationId;
+      const nextLocation = getWorldLocation(nextLocationId);
+      if (nextLocation) {
+        discoveredLocations.add(nextLocation.id);
+        for (const connectionId of nextLocation.connections || []) {
+          discoveredLocations.add(connectionId);
+        }
+      }
+
+      return {
+        ...entity,
+        locationId: nextLocationId,
+        x: typeof update.x === 'number' && Number.isFinite(update.x)
+          ? clampCoordinate(update.x, gridWidth)
+          : entity.x,
+        y: typeof update.y === 'number' && Number.isFinite(update.y)
+          ? clampCoordinate(update.y, gridHeight)
+          : entity.y,
+      };
+    };
+
+    const players = currentMapState.players.map(player => {
+      const playerName = roomPlayers?.[player.id]?.character?.name || player.name;
+      return applyUpdate(player, playerName);
+    });
+
+    const npcs = currentMapState.npcs.map(npc => applyUpdate(npc));
+
+    return sanitizeBattleMapState({
+      ...currentMapState,
+      discoveredLocations: Array.from(discoveredLocations),
+      players,
+      npcs,
+    }, currentMapState);
+  };
+
+  const applyTurnResolution = (roomId: string, data: { log?: string; thoughts?: string; state?: any; mapState?: any }) => {
+    const room = rooms[roomId];
+    if (!room) return;
+
+    delete room.lastResolutionRequestAt;
+    room.awaitingTurnResolution = false;
+    delete room.activeBattleStream;
+    delete room.resolutionRequestNonce;
+    delete room.battleRetryWindowStartedAt;
+    room.battleRetryRestartAvailable = false;
+
+    const newState = data.state;
+
+    if (newState) {
+      for (const pid of Object.keys(room.players)) {
+        const charName = room.players[pid].character.name;
+        const stateData = newState[charName] || Object.values(newState).find((s: any) => s && typeof s === 'object' && s.name === charName);
+
+        if (stateData) {
+          room.players[pid].character.hp = stateData.hp ?? room.players[pid].character.hp;
+          room.players[pid].character.mana = stateData.mana ?? room.players[pid].character.mana;
+          if (stateData.profileMarkdown) {
+            room.players[pid].character.profileMarkdown = stateData.profileMarkdown;
+          }
+        } else {
+          const pIndex = Object.keys(room.players).indexOf(pid) + 1;
+          const fallbackData = newState[`Player${pIndex}`];
+          if (fallbackData) {
+            room.players[pid].character.hp = fallbackData.hp ?? room.players[pid].character.hp;
+            room.players[pid].character.mana = fallbackData.mana ?? room.players[pid].character.mana;
+            if (fallbackData.profileMarkdown) {
+              room.players[pid].character.profileMarkdown = fallbackData.profileMarkdown;
+            }
+          }
+        }
+      }
+    }
+
+    if (room.mapState && data.mapState) {
+      room.mapState = sanitizeBattleMapState(data.mapState, room.mapState);
+    }
+
+    for (const pid of Object.keys(room.players)) {
+      room.players[pid].lockedIn = false;
+      room.players[pid].autoLockedThisTurn = false;
+      room.players[pid].action = '';
+    }
+
+    const historyEntries: string[] = [];
+    if (typeof data.thoughts === 'string' && data.thoughts.trim()) {
+      historyEntries.push(`> **Judge's Thoughts:**\n> ${data.thoughts.replace(/\n/g, '\n> ')}`);
+    }
+    if (typeof data.log === 'string' && data.log.trim()) {
+      historyEntries.push(data.log);
+    }
+
+    io.to(room.id).emit('turnResolved', {
+      log: data.log,
+      thoughts: data.thoughts,
+      state: newState,
+      players: room.players,
+      mapState: room.mapState,
+    });
+    io.to(room.id).emit('battleRetryStatus', { attempt: 0 });
+
+    const alivePlayers = Object.values(room.players).filter((p: any) => p.character.hp > 0);
+    if (alivePlayers.length <= 1) {
+      const winner = alivePlayers[0] as any;
+      historyEntries.push(`**GAME OVER!** ${winner ? winner.character.name : 'No one'} is victorious!`);
+    }
+    appendRoomHistory(roomId, historyEntries);
+
+    if (alivePlayers.length > 1) {
+      room.pendingReadyPlayers = new Set(Object.keys(room.players).filter(pid => alivePlayers.some((a: any) => a === room.players[pid])));
+      logBattleServerDebug('waiting_for_next_turn_ready', {
+        roomId,
+        alivePlayerNames: alivePlayers.map((player: any) => player.character?.name || 'Unknown'),
+        pendingReadyPlayers: Array.from(room.pendingReadyPlayers),
+      });
+      room.readyTimeout = setTimeout(() => {
+        logBattleServerDebug('ready_for_next_turn_timeout', {
+          roomId,
+          pendingReadyPlayers: Array.from(room.pendingReadyPlayers || []),
+        });
+        delete room.pendingReadyPlayers;
+        delete room.readyTimeout;
+        if (rooms[roomId]) startRoomTimer(roomId);
+      }, 30_000);
+    } else {
+      clearRoomTimer(roomId);
+    }
+  };
+
+  const getBattleResolutionApiKey = (room: any) => (
+    (typeof room?.apiKey === 'string' && room.apiKey.trim())
+      ? room.apiKey.trim()
+      : (process.env.GEMINI_API_KEY || process.env.API_KEY || '')
+  );
+
+  const getBattleFallbackNarrative = (room: any) => {
+    const submittedActions = Object.values(room.players || {})
+      .map((player: any) => `- **${player.character.name}:** ${player.action || 'No action submitted.'}`)
+      .join('\n');
+    return [
+      '⚠️ The judge returned a state update without narrative text.',
+      '',
+      '**Submitted actions**',
+      submittedActions,
+    ].join('\n');
+  };
+
+  const get503FallbackBattleModel = (model: string, errorInfo?: { statusCode?: number; statusText?: string }, attempt = 0) => {
+    const isUnavailable = errorInfo?.statusCode === 503 || errorInfo?.statusText === 'UNAVAILABLE';
+    if (!isUnavailable || attempt < 1) return model;
+    if (model === 'gemini-2.5-pro') return 'gemini-2.5-flash';
+    if (model === 'gemini-3.1-pro-preview') return 'gemini-3-flash-preview';
+    return model;
+  };
+
+  const emitBattleStreamStart = (roomId: string) => {
+    const room = rooms[roomId];
+    if (!room) return;
+    room.activeBattleStream = { thoughts: '', answer: '' };
+    io.to(roomId).emit('streamTurnResolutionStart');
+  };
+
+  const emitBattleStreamRefresh = (roomId: string, type: 'thought' | 'answer', text: string) => {
+    const room = rooms[roomId];
+    if (!room) return;
+    if (!room.activeBattleStream) {
+      room.activeBattleStream = { thoughts: '', answer: '' };
+    }
+    if (type === 'thought') {
+      room.activeBattleStream.thoughts = text;
+    } else {
+      room.activeBattleStream.answer = text;
+    }
+    io.to(roomId).emit('streamTurnResolutionChunk', { type, text: `REFRESH:${text}` });
+  };
+
+  const emitBattleToolChunk = (roomId: string, text: string) => {
+    io.to(roomId).emit('streamTurnResolutionChunk', { type: 'tool', text });
+  };
+
+  const runBattleTurnResolution = async (roomId: string, options?: { reissue?: boolean }) => {
+    const room = rooms[roomId];
+    if (!room || room.battleResolutionTaskActive) return;
+
+    room.battleResolutionTaskActive = true;
+
+    try {
+      const apiKey = getBattleResolutionApiKey(room);
+      if (!apiKey) {
+        room.battleRetryRestartAvailable = true;
+        io.to(roomId).emit('battleRetryStatus', {
+          attempt: 0,
+          label: 'Gemini API key is not configured',
+          restartAvailable: true,
+        });
+        io.to(roomId).emit('error', 'Turn resolution failed. Gemini API key is not configured on the server or in the room settings.');
+        return;
+      }
+
+      const playerIds = Object.keys(room.players || {});
+      if (playerIds.length === 0) return;
+
+      const baseLogs = sanitizeBattleHistoryForJudge(Array.isArray(room.history) ? room.history : []);
+      const judgeHistoryLogs = baseLogs.slice();
+      const fullLogText = judgeHistoryLogs.join('\n\n');
+      const logLines = fullLogText.split('\n');
+      const totalLines = logLines.length;
+      const recentNarrativeLogs = extractRecentBattleNarrative(baseLogs);
+
+      let profiles = '';
+      for (const pid of playerIds) {
+        const pData = room.players[pid];
+        profiles += `Profile for ${pData.character.name}:\n${pData.character.profileMarkdown}\n\n`;
+      }
+
+      const sysPrompt = getPrompt('battle_judge.txt');
+      const fullSysPrompt = `${sysPrompt}\n\n${profiles}`;
+
+      let prompt = 'BATTLE STATE (TURN START):\n';
+      for (const pid of playerIds) {
+        const pData = room.players[pid];
+        prompt += `Player (${pData.character.name}):\nHP: ${pData.character.hp}, Mana: ${pData.character.mana}\nAction: ${pData.action}\n\n`;
+      }
+      prompt += buildBattleMapContext(room.mapState, room.players);
+      if (recentNarrativeLogs.length > 0) {
+        prompt += `LATEST RESOLVED BATTLE NARRATIVE:\n${recentNarrativeLogs.join('\n\n')}\n\n`;
+      }
+      prompt += 'The BATTLE MAP STATE above is authoritative. Do not invent new zones, do not remap the battlefield, and do not call any zone-setup tool. Treat the provided named locations and connections as the active combat zones.\n';
+      prompt += `The battle log currently has ${totalLines} lines. You can use the read_battle_history tool to read it if you need context from previous turns. Otherwise, resolve the turn simultaneously. When you call submit_battle_result, include the full markdown turn narration in battleLog. If an action is vague, resolve it as the simplest plausible action for the current distance instead of over-interpreting it.`;
+
+      const readBattleHistory = {
+        name: 'read_battle_history',
+        description: 'Read the battle history markdown log. Provide start and end lines to read a specific section. The log contains all previous turns.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            startLine: { type: 'INTEGER', description: 'The line number to start reading from (1-indexed).' },
+            endLine: { type: 'INTEGER', description: 'The line number to end reading at (inclusive).' },
+          },
+          required: ['startLine', 'endLine'],
+        },
+      };
+
+      const submitBattleResult = {
+        name: 'submit_battle_result',
+        description: 'Submit the updated character states and final markdown battle log after resolving the turn. Always include the full turn narration in battleLog. Include battlePositions whenever movement, pursuit, swimming, sailing, or fleeing changes exact map coordinates.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            battleLog: {
+              type: 'STRING',
+              description: 'The complete markdown narration for this turn. Include the full battle log text that should be shown to players.',
+            },
+            characterStates: {
+              type: 'STRING',
+              description: 'JSON string of character states. Format: {"CharName1": {"hp": number, "mana": number, "profileMarkdown": "optional updated markdown"}, "CharName2": {"hp": number, "mana": number}}',
+            },
+            battlePositions: {
+              type: 'STRING',
+              description: 'Optional JSON string of per-character map positions. Format: {"CharName1": {"x": number, "y": number, "locationId": "nearest_or_tactical_location_id"}, "CharName2": {"x": number, "y": number, "locationId": "..."}}. Update this every turn when movement changes positions, including water travel between islands.',
+            },
+          },
+          required: ['battleLog', 'characterStates'],
+        },
+      };
+
+      const aiClient = createAIClient(apiKey);
+      let contents: any[] = [{ role: 'user', parts: [{ text: prompt }] }];
+      let hasEmittedStart = false;
+      let finalThoughts = '';
+      let finalAnswer = '';
+      let attempts = 0;
+      let lastRetryError: any = null;
+
+      io.to(roomId).emit('battleRetryStatus', { attempt: 0, restartAvailable: false });
+      room.battleRetryRestartAvailable = false;
+      if (!options?.reissue) {
+        delete room.battleRetryWindowStartedAt;
+      }
+
+      while (true) {
+        const activeRoom = rooms[roomId];
+        if (!activeRoom) return;
+
+        const battleAbort = new AbortController();
+        const selectedModel = activeRoom.modelSettings?.battleModel || 'gemini-2.5-pro';
+        const model = get503FallbackBattleModel(selectedModel, lastRetryError || undefined, attempts);
+        const BATTLE_STREAM_STALL_MS = 120_000;
+        let battleStallAborted = false;
+        let battleStallTimer: ReturnType<typeof setTimeout> | null = null;
+        const clearBattleStallTimer = () => {
+          if (battleStallTimer) {
+            clearTimeout(battleStallTimer);
+            battleStallTimer = null;
+          }
+        };
+        const resetBattleStallTimer = () => {
+          clearBattleStallTimer();
+          battleStallTimer = setTimeout(() => {
+            battleStallAborted = true;
+            battleAbort.abort();
+          }, BATTLE_STREAM_STALL_MS);
+        };
+
+        try {
+          while (true) {
+            resetBattleStallTimer();
+
+            let hasToolCall = false;
+            let toolCallPart: any = null;
+            let modelParts: any[] = [];
+            let streamedThoughts = '';
+            let streamedAnswer = '';
+
+            const appendModelPart = (part: any) => {
+              modelParts.push(part);
+              if (part.functionCall) {
+                hasToolCall = true;
+                toolCallPart = part;
+                return;
+              }
+
+              if (hasToolCall) return;
+
+              const isThought = !!part?.thought;
+              const text = typeof part?.thought === 'string' ? part.thought : (part?.text || '');
+              if (!text) return;
+
+              if (!hasEmittedStart) {
+                emitBattleStreamStart(roomId);
+                hasEmittedStart = true;
+              }
+
+              if (isThought) {
+                streamedThoughts += text;
+              } else {
+                streamedAnswer += text;
+              }
+
+              emitBattleStreamRefresh(roomId, 'thought', finalThoughts + streamedThoughts);
+              emitBattleStreamRefresh(roomId, 'answer', (finalAnswer + streamedAnswer).trim());
+            };
+
+            const apiConfig = {
+              model,
+              contents,
+              config: {
+                systemInstruction: fullSysPrompt,
+                temperature: 1.5,
+                thinkingConfig: {
+                  includeThoughts: true,
+                  thinkingBudget: 4096,
+                },
+                tools: [{ functionDeclarations: [readBattleHistory as any, submitBattleResult as any] }],
+                abortSignal: battleAbort.signal,
+              },
+            };
+
+            try {
+              const responseStream = await aiClient.models.generateContentStream(apiConfig as any);
+              for await (const chunk of responseStream as any) {
+                resetBattleStallTimer();
+                const parts = chunk?.candidates?.[0]?.content?.parts || [];
+                for (const part of parts) {
+                  appendModelPart(part);
+                }
+              }
+            } catch (streamError: any) {
+              if (battleAbort.signal.aborted) {
+                throw streamError;
+              }
+
+              const fallbackRes = await aiClient.models.generateContent(apiConfig as any);
+              const fallbackParts = fallbackRes?.candidates?.[0]?.content?.parts || [];
+              modelParts = [];
+              hasToolCall = false;
+              toolCallPart = null;
+              streamedThoughts = '';
+              streamedAnswer = '';
+              for (const part of fallbackParts) {
+                appendModelPart(part);
+              }
+            } finally {
+              clearBattleStallTimer();
+            }
+
+            if (battleAbort.signal.aborted) {
+              if (battleStallAborted) {
+                throw new DOMException('Battle stream stalled', 'AbortError');
+              }
+              return;
+            }
+
+            finalThoughts += streamedThoughts;
+            finalAnswer += streamedAnswer;
+
+            if (hasToolCall && toolCallPart?.functionCall) {
+              const functionCall = toolCallPart.functionCall;
+              const funcName = functionCall.name;
+              const args = functionCall.args as any;
+
+              if (funcName === 'read_battle_history') {
+                const start = Math.max(1, args.startLine || 1);
+                const end = Math.min(totalLines, args.endLine || totalLines);
+                const resultText = logLines.slice(start - 1, end).join('\n');
+
+                emitBattleToolChunk(roomId, `⚙️ Judge called read_battle_history(${start}, ${end})`);
+
+                contents.push({ role: 'model', parts: modelParts });
+                contents.push({
+                  role: 'user',
+                  parts: [{
+                    functionResponse: {
+                      name: 'read_battle_history',
+                      response: { result: resultText },
+                    },
+                  }],
+                });
+                continue;
+              }
+
+              if (funcName === 'submit_battle_result') {
+                let newState = null;
+                try {
+                  newState = typeof args.characterStates === 'string'
+                    ? JSON.parse(args.characterStates)
+                    : args.characterStates;
+                } catch (error) {
+                  console.error('Failed to parse battle state from tool call', error);
+                }
+
+                let battlePositionUpdates = null;
+                try {
+                  battlePositionUpdates = typeof args.battlePositions === 'string'
+                    ? JSON.parse(args.battlePositions)
+                    : args.battlePositions;
+                } catch (error) {
+                  console.error('Failed to parse battle positions from tool call', error);
+                }
+
+                const currentRoom = rooms[roomId];
+                if (!currentRoom) return;
+                const resolvedMapState = mergeBattlePositionUpdates(
+                  currentRoom.mapState,
+                  battlePositionUpdates,
+                  currentRoom.players,
+                );
+                const toolBattleLog = typeof args.battleLog === 'string' ? args.battleLog.trim() : '';
+                applyTurnResolution(roomId, {
+                  log: toolBattleLog || finalAnswer.trim() || getBattleFallbackNarrative(currentRoom),
+                  thoughts: finalThoughts.trim(),
+                  state: newState,
+                  mapState: resolvedMapState ?? currentRoom.mapState,
+                });
+                return;
+              }
+            }
+
+            const combinedOutput = `${finalThoughts}\n${finalAnswer}`;
+            const stateMatch = combinedOutput.match(/<BATTLE_STATE>([\s\S]*?)(?:<\/BATTLE_STATE>|$)/);
+            let newState = null;
+            if (stateMatch) {
+              try {
+                newState = JSON.parse(stateMatch[1]);
+              } catch (error) {
+                console.error('Failed to parse battle state', error);
+              }
+            }
+
+            const positionMatch = combinedOutput.match(/<BATTLE_POSITIONS>([\s\S]*?)(?:<\/BATTLE_POSITIONS>|$)/);
+            let battlePositionUpdates = null;
+            if (positionMatch) {
+              try {
+                battlePositionUpdates = JSON.parse(positionMatch[1]);
+              } catch (error) {
+                console.error('Failed to parse battle positions', error);
+              }
+            }
+
+            const currentRoom = rooms[roomId];
+            if (!currentRoom) return;
+            const resolvedMapState = mergeBattlePositionUpdates(
+              currentRoom.mapState,
+              battlePositionUpdates,
+              currentRoom.players,
+            );
+
+            applyTurnResolution(roomId, {
+              log: finalAnswer
+                .replace(/<BATTLE_STATE>[\s\S]*?(?:<\/BATTLE_STATE>|$)/, '')
+                .replace(/<BATTLE_POSITIONS>[\s\S]*?(?:<\/BATTLE_POSITIONS>|$)/, '')
+                .trim() || getBattleFallbackNarrative(currentRoom),
+              thoughts: finalThoughts.trim(),
+              state: newState,
+              mapState: resolvedMapState ?? currentRoom.mapState,
+            });
+            return;
+          }
+        } catch (error: any) {
+          clearBattleStallTimer();
+
+          if (error?.name === 'AbortError' && battleStallAborted) {
+            attempts += 1;
+            lastRetryError = { label: 'Model stream stalled' };
+            const retryDelay = getAIRetryDelaySeconds(attempts);
+            io.to(roomId).emit('battleRetryStatus', {
+              attempt: 0,
+              label: 'Model stream stalled',
+              delay: Math.round(retryDelay),
+              restartAvailable: false,
+            });
+            await new Promise(resolve => setTimeout(resolve, retryDelay * 1000));
+            continue;
+          }
+
+          if (error?.name === 'AbortError') {
+            return;
+          }
+
+          const errorInfo = classifyAIError(error);
+          lastRetryError = errorInfo;
+
+          if (!errorInfo.retryable) {
+            delete activeRoom.lastResolutionRequestAt;
+            activeRoom.awaitingTurnResolution = false;
+            delete activeRoom.activeBattleStream;
+            delete activeRoom.resolutionRequestNonce;
+            delete activeRoom.battleRetryWindowStartedAt;
+            activeRoom.battleRetryRestartAvailable = false;
+            io.to(roomId).emit('battleRetryStatus', { attempt: 0, restartAvailable: false });
+            io.to(roomId).emit('error', `Turn resolution failed (${selectedModel}). ${formatAIError(errorInfo)}`);
+            return;
+          }
+
+          attempts += 1;
+          const now = Date.now();
+          if (typeof activeRoom.battleRetryWindowStartedAt !== 'number') {
+            activeRoom.battleRetryWindowStartedAt = now;
+          }
+          const elapsed = now - activeRoom.battleRetryWindowStartedAt;
+          const remainingMs = Math.max(0, BATTLE_RETRY_WINDOW_MS - elapsed);
+
+          if (remainingMs <= 0) {
+            activeRoom.battleRetryRestartAvailable = true;
+            io.to(roomId).emit('battleRetryStatus', {
+              attempt: attempts,
+              label: errorInfo.label,
+              statusCode: errorInfo.statusCode,
+              statusText: errorInfo.statusText,
+              restartAvailable: true,
+              delay: 0,
+            });
+            return;
+          }
+
+          const retryDelay = Math.min(
+            getAIRetryDelaySeconds(attempts, errorInfo.suggestedRetrySeconds),
+            Math.max(1, remainingMs / 1000),
+          );
+          activeRoom.battleRetryRestartAvailable = false;
+          io.to(roomId).emit('battleRetryStatus', {
+            attempt: attempts,
+            label: errorInfo.label,
+            delay: Math.round(retryDelay),
+            statusCode: errorInfo.statusCode,
+            statusText: errorInfo.statusText,
+            restartAvailable: false,
+          });
+          await new Promise(resolve => setTimeout(resolve, retryDelay * 1000));
+          continue;
+        }
+      }
+    } finally {
+      if (rooms[roomId]) {
+        rooms[roomId].battleResolutionTaskActive = false;
+      }
+    }
   };
 
   const emitBattleMapState = (roomId: string) => {
@@ -1919,6 +2787,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
     }
 
     let attempts = 0;
+    const retryWindowStartedAt = Date.now();
 
     for (const pc of playerContexts) {
       io.to(pc.socketId).emit("explorationStreamStart", { requestId });
@@ -2134,8 +3003,41 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         if (error.message === "Aborted") throw error;
 
         const errorInfo = classifyAIError(error);
+        if (!errorInfo.retryable) {
+          for (const pc of playerContexts) {
+            io.to(pc.socketId).emit('explorationActionError', {
+              requestId,
+              message: formatAIError(errorInfo),
+            });
+          }
+          throw error;
+        }
+
         attempts++;
-        const delay = getAIRetryDelaySeconds(attempts);
+        const remainingMs = AI_RETRY_WINDOW_MS - (Date.now() - retryWindowStartedAt);
+        if (remainingMs <= 0) {
+          for (const pc of playerContexts) {
+            io.to(pc.socketId).emit("explorationRetry", {
+              requestId,
+              attempt: attempts,
+              delay: 0,
+              label: errorInfo.label,
+              statusCode: errorInfo.statusCode,
+              statusText: errorInfo.statusText,
+              restartAvailable: true,
+            });
+            io.to(pc.socketId).emit('explorationActionError', {
+              requestId,
+              message: `${errorInfo.label}. Retry window expired. Start a new 2-minute retry session when ready.`,
+            });
+          }
+          return;
+        }
+
+        const delay = Math.min(
+          getAIRetryDelaySeconds(attempts, errorInfo.suggestedRetrySeconds),
+          Math.max(1, remainingMs / 1000),
+        );
         // Notify players retrying
         for (const pc of playerContexts) {
           io.to(pc.socketId).emit("explorationRetry", {
@@ -2146,9 +3048,6 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
             statusCode: errorInfo.statusCode,
             statusText: errorInfo.statusText,
           });
-        }
-        if (!errorInfo.retryable) {
-          console.error("Exploration AI non-retryable error (still retrying):", formatAIError(errorInfo));
         }
         await new Promise(resolve => setTimeout(resolve, delay * 1000));
         continue;
@@ -2175,6 +3074,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         activeBattleStream: room.activeBattleStream && (room.activeBattleStream.thoughts || room.activeBattleStream.answer)
           ? room.activeBattleStream
           : null,
+        battleRetryRestartAvailable: !!room.battleRetryRestartAvailable,
         turnTimerRemaining: room.unlimitedTurnTime
           ? null
           : roomTimers[roomId!]?.remaining ?? room.pausedTurnRemaining ?? null,
@@ -2362,12 +3262,12 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         resumeRoomAfterReconnect(roomId);
 
         const shouldReissueTurnResolution = room.phase === 'battle'
-          && room.host === socket.id
           && (
             room.awaitingTurnResolution
             || Object.keys(room.players || {}).every((playerId) => !!room.players[playerId]?.lockedIn)
           )
-          && !room.pendingReadyPlayers;
+          && !room.pendingReadyPlayers
+          && !room.battleRetryRestartAvailable;
         if (shouldReissueTurnResolution) {
           delete room.lastResolutionRequestAt;
           setTimeout(() => requestTurnResolutionIfReady(roomId, { reissue: true }), 250);
@@ -2942,6 +3842,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       rooms[roomId] = {
         id: roomId,
         host: socket.id,
+        apiKey: typeof data?.apiKey === 'string' ? data.apiKey.trim() : '',
         isBotMatch: true,
         botCharacterId: data.botCharacterId || null,
         unlimitedTurnTime: ALWAYS_UNLIMITED_TURN_TIME,
@@ -3014,7 +3915,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       emitBattleMapState(roomId);
     });
 
-    socket.on("enterArena", (data?: { unlimitedTurnTime?: boolean; arenaPreviewSeconds?: number; arenaTweakSeconds?: number; battleTurnSeconds?: number; modelSettings?: { charModel?: string; explorationModel?: string; battleModel?: string; botModel?: string } | null }) => {
+    socket.on("enterArena", (data?: { apiKey?: string; unlimitedTurnTime?: boolean; arenaPreviewSeconds?: number; arenaTweakSeconds?: number; battleTurnSeconds?: number; modelSettings?: { charModel?: string; explorationModel?: string; battleModel?: string; botModel?: string } | null }) => {
       if (!players[socket.id]?.character) {
         socket.emit("error", "Create a character first.");
         return;
@@ -3024,6 +3925,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
         id: socket.id,
         character: players[socket.id].character,
         isReady: false,
+        apiKey: typeof data?.apiKey === 'string' ? data.apiKey.trim() : '',
         unlimitedTurnTime: ALWAYS_UNLIMITED_TURN_TIME,
         arenaPreviewSeconds: typeof data?.arenaPreviewSeconds === 'number' ? data.arenaPreviewSeconds : undefined,
         arenaTweakSeconds: typeof data?.arenaTweakSeconds === 'number' ? data.arenaTweakSeconds : undefined,
@@ -3060,6 +3962,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
           rooms[roomId] = {
             id: roomId,
             host: queueList[0].id,
+            apiKey: queueList.find(p => typeof p.apiKey === 'string' && p.apiKey.trim())?.apiKey?.trim() || '',
             players: roomPlayers,
             unlimitedTurnTime: ALWAYS_UNLIMITED_TURN_TIME,
             arenaPreviewSeconds: queueList.find(p => typeof p.arenaPreviewSeconds === 'number')?.arenaPreviewSeconds ?? ARENA_PREVIEW_SECONDS,
@@ -3210,6 +4113,20 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       io.to(roomId).emit("battleRetryStatus", data);
     });
 
+    socket.on('restartBattleRetryWindow', () => {
+      const roomId = players[socket.id]?.room;
+      if (!roomId) return;
+
+      const room = rooms[roomId];
+      if (!room?.awaitingTurnResolution || !room.battleRetryRestartAvailable || room.battleResolutionTaskActive) return;
+
+      room.battleRetryWindowStartedAt = Date.now();
+      room.battleRetryRestartAvailable = false;
+      delete room.lastResolutionRequestAt;
+      io.to(roomId).emit('battleRetryStatus', { attempt: 0, restartAvailable: false });
+      void runBattleTurnResolution(roomId, { reissue: true });
+    });
+
     socket.on("playerAction", (payload) => {
       const roomId = players[socket.id]?.room;
       if (!roomId) return;
@@ -3300,98 +4217,9 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       if (!roomId) return;
 
       const room = rooms[roomId];
-      if (!room) return;
+      if (!room || !room.awaitingTurnResolution || room.battleResolutionTaskActive) return;
 
-      delete room.lastResolutionRequestAt;
-      room.awaitingTurnResolution = false;
-      delete room.activeBattleStream;
-      delete room.resolutionRequestNonce;
-
-      const newState = data.state;
-
-      if (newState) {
-        for (const pid of Object.keys(room.players)) {
-          const charName = room.players[pid].character.name;
-          // Try to find the state by character name, or fallback to Player1/Player2 logic if the LLM used that
-          const stateData = newState[charName] || Object.values(newState).find((s: any) => s && typeof s === 'object' && s.name === charName);
-          
-          if (stateData) {
-            room.players[pid].character.hp = stateData.hp ?? room.players[pid].character.hp;
-            room.players[pid].character.mana = stateData.mana ?? room.players[pid].character.mana;
-            if (stateData.profileMarkdown) {
-              room.players[pid].character.profileMarkdown = stateData.profileMarkdown;
-            }
-          } else {
-            // Fallback for Player1/Player2 if the LLM followed the old format
-            const pIndex = Object.keys(room.players).indexOf(pid) + 1;
-            const fallbackData = newState[`Player${pIndex}`];
-            if (fallbackData) {
-              room.players[pid].character.hp = fallbackData.hp ?? room.players[pid].character.hp;
-              room.players[pid].character.mana = fallbackData.mana ?? room.players[pid].character.mana;
-              if (fallbackData.profileMarkdown) {
-                room.players[pid].character.profileMarkdown = fallbackData.profileMarkdown;
-              }
-            }
-          }
-        }
-      }
-
-      if (room.mapState && data.mapState) {
-        room.mapState = sanitizeBattleMapState(data.mapState, room.mapState);
-      }
-
-      // Reset locks
-      for (const pid of Object.keys(room.players)) {
-        room.players[pid].lockedIn = false;
-        room.players[pid].autoLockedThisTurn = false;
-        room.players[pid].action = "";
-      }
-
-      const historyEntries: string[] = [];
-      if (typeof data.thoughts === 'string' && data.thoughts.trim()) {
-        historyEntries.push(`> **Judge's Thoughts:**\n> ${data.thoughts.replace(/\n/g, '\n> ')}`);
-      }
-      if (typeof data.log === 'string' && data.log.trim()) {
-        historyEntries.push(data.log);
-      }
-
-      io.to(room.id).emit("turnResolved", {
-        log: data.log,
-        thoughts: data.thoughts,
-        state: newState,
-        players: room.players,
-        mapState: room.mapState,
-      });
-
-      // Start timer for next turn if game continues (more than 1 player alive)
-      // Timer is deferred until players signal readyForNextTurn (after scene image generates)
-      const alivePlayers = Object.values(room.players).filter((p: any) => p.character.hp > 0);
-      if (alivePlayers.length <= 1) {
-        const winner = alivePlayers[0] as any;
-        historyEntries.push(`**GAME OVER!** ${winner ? winner.character.name : 'No one'} is victorious!`);
-      }
-      appendRoomHistory(roomId, historyEntries);
-
-      if (alivePlayers.length > 1) {
-        room.pendingReadyPlayers = new Set(Object.keys(room.players).filter(pid => alivePlayers.some((a: any) => a === room.players[pid])));
-        logBattleServerDebug('waiting_for_next_turn_ready', {
-          roomId,
-          alivePlayerNames: alivePlayers.map((player: any) => player.character?.name || 'Unknown'),
-          pendingReadyPlayers: Array.from(room.pendingReadyPlayers),
-        });
-        // Safety timeout: start timer after 30s even if no readyForNextTurn received
-        room.readyTimeout = setTimeout(() => {
-          logBattleServerDebug('ready_for_next_turn_timeout', {
-            roomId,
-            pendingReadyPlayers: Array.from(room.pendingReadyPlayers || []),
-          });
-          delete room.pendingReadyPlayers;
-          delete room.readyTimeout;
-          if (rooms[roomId]) startRoomTimer(roomId);
-        }, 30_000);
-      } else {
-        clearRoomTimer(roomId);
-      }
+      applyTurnResolution(roomId, data || {});
     });
 
     socket.on("streamTurnResolutionStart", () => {

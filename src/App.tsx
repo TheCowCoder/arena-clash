@@ -3,7 +3,7 @@ import { io, Socket } from 'socket.io-client';
 import Markdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
 import { Home, User, Users, Shield, Heart, Send, Check, Loader2, Sword, Settings, ChevronDown, ArrowLeft, AlertTriangle, Info, Compass, Map, Star, ChevronUp, Maximize2, Minimize2, Target, Beef, GlassWater, Zap, Package, X, Eye, Coins, Orbit } from 'lucide-react';
-import { classifyAIError, createAIClient, formatAIError, getAIRetryDelaySeconds } from '../ai';
+import { classifyAIError, formatAIError, getAIRetryDelaySeconds } from '../ai-errors';
 
 // ErrorBoundary to prevent white-screen crashes from markdown rendering errors
 class MarkdownErrorBoundary extends React.Component<{ children: React.ReactNode; fallback: string }, { hasError: boolean }> {
@@ -917,15 +917,128 @@ export default function App() {
 
   const getAIClient = useCallback(() => {
     const customKey = settingsRef.current.apiKey?.trim();
-    if (customKey) {
-      console.log(`Using custom API key ending in ...${customKey.slice(-4)}`);
-      return createAIClient(customKey);
-    }
-    
-    // If the user selected a key via the platform dialog, it might be injected here
-    // We create a new instance to ensure we pick up any dynamically injected keys
-    console.log("Using platform-provided API key");
-    return createAIClient(process.env.API_KEY || process.env.GEMINI_API_KEY);
+    const buildServerAIError = (payload: any, fallbackStatus?: number) => {
+      const error: any = new Error(payload?.message || payload?.detail || payload?.error || `Gemini request failed${fallbackStatus ? ` (${fallbackStatus})` : ''}`);
+      const statusCode = typeof payload?.statusCode === 'number' ? payload.statusCode : fallbackStatus;
+      error.status = statusCode;
+      error.code = statusCode;
+      error.details = payload?.detail || payload?.message || payload?.error;
+      error.retryWindowExpired = !!payload?.retryWindowExpired;
+      error.error = {
+        code: statusCode,
+        status: payload?.statusText,
+        message: payload?.detail || payload?.error || payload?.message,
+      };
+      return error;
+    };
+
+    const buildRequestBody = (request: any) => {
+      const { abortSignal: _abortSignal, ...config } = request?.config || {};
+      return {
+        apiKey: customKey || '',
+        model: request?.model,
+        contents: request?.contents,
+        config,
+      };
+    };
+
+    return {
+      models: {
+        generateContent: async (request: any) => {
+          const abortSignal = request?.config?.abortSignal;
+          const response = await fetch('/api/ai/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(buildRequestBody(request)),
+            signal: abortSignal,
+          });
+
+          const payload = await response.json().catch(() => null);
+          if (!response.ok) {
+            throw buildServerAIError(payload, response.status);
+          }
+
+          return {
+            text: typeof payload?.text === 'string' ? payload.text : '',
+            candidates: Array.isArray(payload?.candidates) ? payload.candidates : [],
+          };
+        },
+        generateContentStream: async (request: any) => {
+          const abortSignal = request?.config?.abortSignal;
+          const response = await fetch('/api/ai/generate-stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(buildRequestBody(request)),
+            signal: abortSignal,
+          });
+
+          if (!response.ok) {
+            const payload = await response.json().catch(() => null);
+            throw buildServerAIError(payload, response.status);
+          }
+
+          const reader = response.body?.getReader();
+          if (!reader) {
+            throw buildServerAIError({ message: 'Gemini stream body was empty' }, response.status);
+          }
+
+          return {
+            async *[Symbol.asyncIterator]() {
+              const decoder = new TextDecoder();
+              let buffer = '';
+
+              const flushLine = (line: string) => {
+                const parsed = JSON.parse(line);
+                if (parsed?.error) {
+                  throw buildServerAIError(parsed.error, response.status);
+                }
+                return {
+                  candidates: Array.isArray(parsed?.candidates) ? parsed.candidates : [],
+                };
+              };
+
+              while (true) {
+                const { value, done } = await reader.read();
+                buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+                let newlineIndex = buffer.indexOf('\n');
+                while (newlineIndex >= 0) {
+                  const line = buffer.slice(0, newlineIndex).trim();
+                  buffer = buffer.slice(newlineIndex + 1);
+                  if (line) {
+                    yield flushLine(line);
+                  }
+                  newlineIndex = buffer.indexOf('\n');
+                }
+
+                if (done) {
+                  const trailing = buffer.trim();
+                  if (trailing) {
+                    yield flushLine(trailing);
+                  }
+                  return;
+                }
+              }
+            },
+          };
+        },
+      },
+    };
+  }, []);
+
+  const clearRetryRestartButton = useCallback((key: string) => {
+    delete retryRestartHandlersRef.current[key];
+    setLocalRetryRestartButtons(prev => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }, []);
+
+  const registerRetryRestartButton = useCallback((key: string, label: string, handler: () => void) => {
+    retryRestartHandlersRef.current[key] = handler;
+    setLocalRetryRestartButtons(prev => ({ ...prev, [key]: label }));
   }, []);
 
   const upsertExplorationStreamMessage = useCallback((streamId: string, text: string, kind: 'thought' | 'answer') => {
@@ -1053,6 +1166,7 @@ export default function App() {
   const [charCreatorRetryAttempt, setCharCreatorRetryAttempt] = useState(0);
   const [charCreator503RetryAttempt, setCharCreator503RetryAttempt] = useState(0);
   const [charCreatorError, setCharCreatorError] = useState<string | null>(null);
+  const lastCharCreatorPromptRef = useRef<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const chatScrollContainerRef = useRef<HTMLDivElement>(null);
   const [charAutoScroll, setCharAutoScroll] = useState(true);
@@ -1104,6 +1218,7 @@ export default function App() {
   const explorationInputRef = useRef<HTMLTextAreaElement>(null);
   const worldDataRef = useRef<any>(null);
   const activeExplorationStreamIdRef = useRef<string | null>(null);
+  const lastExplorationRequestRef = useRef<{ mode: 'action' | 'lock'; payload: any } | null>(null);
   const [explorationRetryAttempt, setExplorationRetryAttempt] = useState(0);
   const [exploration503RetryAttempt, setExploration503RetryAttempt] = useState(0);
   const [explorationError, setExplorationError] = useState<string | null>(null);
@@ -1197,12 +1312,15 @@ export default function App() {
   const [battleError, setBattleError] = useState<string | null>(null);
   const [retryAttempt, setRetryAttempt] = useState(0);
   const [battle503RetryAttempt, setBattle503RetryAttempt] = useState(0);
+  const [battleRetryRestartAvailable, setBattleRetryRestartAvailable] = useState(false);
   const [battleImageRetryAttempt, setBattleImageRetryAttempt] = useState(0);
   const [bot503RetryAttempt, setBot503RetryAttempt] = useState(0);
+  const [localRetryRestartButtons, setLocalRetryRestartButtons] = useState<Record<string, string>>({});
   const [expandedThoughts, setExpandedThoughts] = useState<Set<number>>(new Set());
   const [expandedExplorationThoughts, setExpandedExplorationThoughts] = useState<Set<string>>(new Set());
   const abortControllerRef = useRef<AbortController | null>(null);
   const activeTurnResolutionRequestKeyRef = useRef<string | null>(null);
+  const retryRestartHandlersRef = useRef<Record<string, () => void>>({});
   const [isLockedIn, setIsLockedIn] = useState(false);
   const [roomTypingIds, setRoomTypingIds] = useState<string[]>([]);
   const [localRoomTypingIds, setLocalRoomTypingIds] = useState<string[]>([]);
@@ -2224,6 +2342,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         setBattleLogs(restoredLogs);
         setBattleError(null);
         setRetryAttempt(0);
+        setBattleRetryRestartAvailable(!!roomSnapshot.battleRetryRestartAvailable);
         setTurnTimerRemaining(roomSnapshot.turnTimerRemaining ?? null);
         setIsBotMatch(!!roomSnapshot.isBotMatch);
         setIsLockedIn(!!roomSnapshot.players?.[socket.id || '']?.lockedIn);
@@ -2264,6 +2383,8 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         }
         return;
       }
+
+      setBattleRetryRestartAvailable(false);
 
       if (explorationSnapshot) {
         const nextState = explorationSnapshot.state || {};
@@ -2885,6 +3006,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       setHasVisualizedThisTurn(false);
       clearBattleStatusLog('battle-resync');
       setBattle503RetryAttempt(0);
+      setBattleRetryRestartAvailable(false);
       if (connectionPhaseRef.current === 'resyncing') {
         flashConnectionPhase('reconnected');
       }
@@ -2990,14 +3112,19 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       setBattleLogs(prev => ensureBattleStreamPlaceholders(prev));
     });
 
-    socket.on('battleRetryStatus', (data: { attempt: number; statusCode?: number; statusText?: string }) => {
+    socket.on('battleRetryStatus', (data: { attempt: number; statusCode?: number; statusText?: string; label?: string; delay?: number; restartAvailable?: boolean }) => {
       appendBattleTraceEvent('battle_retry_status', {
         roomId: roomIdRef.current,
         attempt: data.attempt,
         statusCode: data.statusCode ?? null,
         statusText: data.statusText ?? null,
+        restartAvailable: !!data.restartAvailable,
       });
       setBattle503RetryAttempt(isServiceUnavailableRetry(data) ? data.attempt : 0);
+      setBattleRetryRestartAvailable(!!data.restartAvailable);
+      if (data.restartAvailable) {
+        setBattleError(`${data.label || 'Gemini is temporarily unavailable'}. Retry window expired. Start a new 2-minute retry session when ready.`);
+      }
     });
 
     socket.on('streamTurnResolutionChunk', (data: { type: 'thought' | 'answer' | 'tool', text: string }) => {
@@ -3222,6 +3349,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       if (activeExplorationStreamIdRef.current && activeExplorationStreamIdRef.current !== data.requestId) return;
       activeExplorationStreamIdRef.current = null;
       console.log('[SERVER AI] Result received, text length:', data.text?.length, 'tools:', data.toolCalls?.length);
+      clearRetryRestartButton('exploration');
       setIsExplorationProcessing(false);
       setExplorationLockStatus([]);
       setExplorationRetryAttempt(0);
@@ -3330,6 +3458,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
               : enemyProfile;
 
             socket.emit('startBotMatch', {
+              apiKey: settingsRef.current.apiKey?.trim() || '',
               difficulty: 'Medium',
               botProfile: fullProfile,
               botName: enemyName,
@@ -3379,8 +3508,18 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       });
     });
 
-    socket.on('explorationRetry', (data: { requestId: string; attempt: number; delay: number; label: string; statusCode?: number; statusText?: string }) => {
+    socket.on('explorationRetry', (data: { requestId: string; attempt: number; delay: number; label: string; statusCode?: number; statusText?: string; restartAvailable?: boolean }) => {
       if (activeExplorationStreamIdRef.current && activeExplorationStreamIdRef.current !== data.requestId) return;
+      if (data.restartAvailable) {
+        setExplorationRetryAttempt(0);
+        setExploration503RetryAttempt(0);
+        setExplorationError(`${data.label}. Retry window expired. Start a new 2-minute retry session when ready.`);
+        upsertExplorationStatusMessage('exploration-retry', `⚠️ ${data.label}. Retry window expired. Start a new 2-minute retry session when ready.`);
+        registerRetryRestartButton('exploration', 'Retry Explore For 2m', () => {
+          restartLatestExplorationRequest();
+        });
+        return;
+      }
       setExplorationRetryAttempt(data.attempt);
       setExploration503RetryAttempt(isServiceUnavailableRetry(data) ? data.attempt : 0);
       setExplorationError(`${data.label}. Retrying in ${data.delay}s...`);
@@ -3604,6 +3743,8 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     if (!inputText.trim() || isWaitingForChar || (gameStateRef.current === 'arena_prep' && !!players[socket.id || '']?.lockedIn)) return;
     
     const sentText = inputText.trim();
+    clearRetryRestartButton('char-creator');
+    lastCharCreatorPromptRef.current = sentText;
     clearTypingPresence('character');
     const newMessages = [...messages, { role: 'user' as const, text: sentText }];
     setMessages(newMessages);
@@ -3664,6 +3805,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     let attempts = 0;
     const charAbort = new AbortController();
     const CHAR_STREAM_STALL_MS = 60_000;
+    const retryWindowStartedAt = Date.now();
     setCharCreator503RetryAttempt(0);
 
     while (true) {
@@ -3781,7 +3923,25 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
             return newMsgs;
           });
           attempts++;
-          const delay = getAIRetryDelaySeconds(attempts, errorInfo.suggestedRetrySeconds);
+          const remainingMs = 120_000 - (Date.now() - retryWindowStartedAt);
+          if (remainingMs <= 0) {
+            const retryPrompt = lastCharCreatorPromptRef.current || sentText;
+            registerRetryRestartButton('char-creator', 'Retry Character For 2m', () => {
+              setInputText(retryPrompt);
+              window.setTimeout(() => {
+                void handleSendCharMessage();
+              }, 0);
+            });
+            setCharCreatorRetryAttempt(0);
+            setCharCreator503RetryAttempt(0);
+            setCharCreatorError(`${errorInfo.label}. Retry window expired. Start a new 2-minute retry session when ready.`);
+            upsertChatStatusMessage('char-creator-retry', `⚠️ ${errorInfo.label}. Retry window expired. Start a new 2-minute retry session when ready.`);
+            break;
+          }
+          const delay = Math.min(
+            getAIRetryDelaySeconds(attempts, errorInfo.suggestedRetrySeconds),
+            Math.max(1, remainingMs / 1000),
+          );
           const delaySec = Math.round(delay);
           setCharCreatorRetryAttempt(attempts);
           setCharCreator503RetryAttempt(isServiceUnavailableRetry(errorInfo) ? attempts : 0);
@@ -3900,6 +4060,25 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     recentLog: explorationLog.slice(-10).map(m => `${m.role === 'user' ? 'Player' : 'Guide'}: ${m.text}`)
   });
 
+  const restartLatestExplorationRequest = useCallback(() => {
+    const pendingRequest = lastExplorationRequestRef.current;
+    if (!pendingRequest) return;
+
+    clearRetryRestartButton('exploration');
+    setExplorationError(null);
+    setExplorationRetryAttempt(0);
+    setExploration503RetryAttempt(0);
+
+    if (pendingRequest.mode === 'lock') {
+      setIsExplorationLockedIn(true);
+      socket.emit('explorationLockIn', pendingRequest.payload);
+      return;
+    }
+
+    setIsExplorationProcessing(true);
+    socket.emit('explorationAction', pendingRequest.payload);
+  }, [clearRetryRestartButton]);
+
   const isImmediateExplorationAction = (action: string) => {
     const normalized = action.toLowerCase();
     const directTradeVerb = /^(?:buy|purchase|sell|offer|trade|accept(?:\s+trade)?|decline(?:\s+trade)?)/i;
@@ -3944,7 +4123,9 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       // Multiplayer: lock in action and wait for others
       setIsExplorationLockedIn(true);
       setExplorationLog(prev => [...prev, { role: 'user', text: `🔒 ${action}` }]);
-      socket.emit('explorationLockIn', { action, ...getExplorationContext() });
+      const payload = { action, ...getExplorationContext() };
+      lastExplorationRequestRef.current = { mode: 'lock', payload };
+      socket.emit('explorationLockIn', payload);
     } else {
       // Solo or immediate deterministic action: send action to server now
       setExplorationLog(prev => [...prev, { role: 'user', text: action }]);
@@ -3954,7 +4135,9 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       setExploration503RetryAttempt(0);
       clearExplorationStatusMessage('exploration-retry');
       socket.emit('explorationActing', { acting: true });
-      socket.emit('explorationAction', { action, ...getExplorationContext() });
+      const payload = { action, ...getExplorationContext() };
+      lastExplorationRequestRef.current = { mode: 'action', payload };
+      socket.emit('explorationAction', payload);
     }
   };
 
@@ -3979,6 +4162,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
 
   const handleGenerateCharImage = async () => {
     if (!character || isGeneratingCharImage) return;
+    clearRetryRestartButton('char-image');
     setIsGeneratingCharImage(true);
     console.log("[Portrait] Starting generation for:", character.name);
     const generationMessageId = `avatar-generation-${character.name}-${Date.now()}`;
@@ -4016,10 +4200,15 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         console.log("[Portrait] Success! Image generated.");
         return;
       }
-      console.warn("[Portrait] No image data in response parts:", parts.map(p => Object.keys(p)));
+      console.warn("[Portrait] No image data in response parts:", parts.map((p: any) => Object.keys(p)));
       setMessages(prev => [...prev, { role: 'system', text: '⚠️ No image was generated. Try again.' }]);
     } catch (error: any) {
       console.error("[Portrait] Generation error:", error);
+      if (error?.retryWindowExpired) {
+        registerRetryRestartButton('char-image', 'Retry Portrait For 2m', () => {
+          void handleGenerateCharImage();
+        });
+      }
       setMessages(prev => [...prev, { role: 'system', text: `⚠️ Image generation failed: ${error.message}` }]);
     } finally {
       setMessages(prev => prev.filter(message => message.streamId !== generationMessageId));
@@ -4031,6 +4220,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     if (!worldData || !explorationState.locationId || isVisualizingScene) return;
     const loc = getCurrentLocation();
     if (!loc) return;
+    clearRetryRestartButton('scene-image');
     setIsVisualizingScene(true);
     
     try {
@@ -4058,6 +4248,11 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       }
     } catch (error: any) {
       console.error("Scene visualization error:", error);
+      if (error?.retryWindowExpired) {
+        registerRetryRestartButton('scene-image', 'Retry Scene For 2m', () => {
+          void handleVisualizeScene();
+        });
+      }
       setExplorationLog(prev => [...prev, { role: 'system', text: `[ERROR]: Scene visualization failed: ${error.message}` }]);
     } finally {
       setIsVisualizingScene(false);
@@ -4081,6 +4276,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       return;
     }
 
+    clearRetryRestartButton('battle-image');
     showBattleImagePendingStatus();
     setBattleImageRetryAttempt(0);
     setIsGeneratingBattleImage(true);
@@ -4321,6 +4517,9 @@ ${combatantAnchorSummary || '- Use the authoritative battlefield state to anchor
           await new Promise(resolve => window.setTimeout(resolve, delay * 1000));
           continue;
         } catch (error: any) {
+          if (error?.retryWindowExpired) {
+            throw error;
+          }
           const errorInfo = classifyAIError(error);
           attempt += 1;
           setBattleImageRetryAttempt(attempt);
@@ -4357,6 +4556,11 @@ ${combatantAnchorSummary || '- Use the authoritative battlefield state to anchor
       }
     } catch (error: any) {
       console.error("Battle image error:", error);
+      if (error?.retryWindowExpired) {
+        registerRetryRestartButton('battle-image', 'Retry Image For 2m', () => {
+          void handleGenerateBattleImage();
+        });
+      }
       appendBattleTraceEvent('battle_image_generation_failed', {
         roomId: activeImageRoomId,
         message: error?.message || String(error),
@@ -4412,7 +4616,7 @@ ${combatantAnchorSummary || '- Use the authoritative battlefield state to anchor
       }
       return;
     }
-    socket.emit('enterArena', { unlimitedTurnTime: settingsRef.current.unlimitedTurnTime, modelSettings: { charModel: settingsRef.current.charModel, explorationModel: settingsRef.current.explorationModel, battleModel: settingsRef.current.battleModel, botModel: settingsRef.current.botModel } });
+    socket.emit('enterArena', { apiKey: settingsRef.current.apiKey?.trim() || '', unlimitedTurnTime: settingsRef.current.unlimitedTurnTime, modelSettings: { charModel: settingsRef.current.charModel, explorationModel: settingsRef.current.explorationModel, battleModel: settingsRef.current.battleModel, botModel: settingsRef.current.botModel } });
   };
 
   const handleNewCharacter = () => {
@@ -4608,6 +4812,7 @@ ${combatantAnchorSummary || '- Use the authoritative battlefield state to anchor
   };
 
   const render503RetryPills = () => {
+    const restartEntries = Object.entries(localRetryRestartButtons);
     const pills = [
       battleImageRetryAttempt > 0 ? { key: 'battle-image', label: 'Image', attempt: battleImageRetryAttempt } : null,
       charCreator503RetryAttempt > 0 ? { key: 'char-creator', label: '503 Character', attempt: charCreator503RetryAttempt } : null,
@@ -4616,7 +4821,7 @@ ${combatantAnchorSummary || '- Use the authoritative battlefield state to anchor
       bot503RetryAttempt > 0 ? { key: 'bot', label: '503 Bot', attempt: bot503RetryAttempt } : null,
     ].filter(Boolean) as Array<{ key: string; label: string; attempt: number }>;
 
-    if (pills.length === 0) return null;
+    if (pills.length === 0 && !battleRetryRestartAvailable && restartEntries.length === 0) return null;
 
     return (
       <div className="px-2 pt-2 flex flex-wrap justify-end gap-1.5 bg-white">
@@ -4627,6 +4832,34 @@ ${combatantAnchorSummary || '- Use the authoritative battlefield state to anchor
           >
             {pill.label} Retry #{pill.attempt}
           </span>
+        ))}
+        {battleRetryRestartAvailable && roomId && (
+          <button
+            type="button"
+            onClick={() => {
+              setBattleRetryRestartAvailable(false);
+              setBattle503RetryAttempt(0);
+              setBattleError(null);
+              socket.emit('restartBattleRetryWindow');
+            }}
+            className="inline-flex items-center rounded-full border border-amber-500 bg-amber-200 px-3 py-1 text-[10px] font-black uppercase text-amber-950 shadow-sm"
+          >
+            Retry Battle For 2m
+          </button>
+        )}
+        {restartEntries.map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => {
+              const handler = retryRestartHandlersRef.current[key];
+              clearRetryRestartButton(key);
+              handler?.();
+            }}
+            className="inline-flex items-center rounded-full border border-amber-500 bg-amber-200 px-3 py-1 text-[10px] font-black uppercase text-amber-950 shadow-sm"
+          >
+            {label}
+          </button>
         ))}
       </div>
     );
@@ -4667,6 +4900,7 @@ ${combatantAnchorSummary || '- Use the authoritative battlefield state to anchor
   };
 
   const handleGenerateBot = async () => {
+    clearRetryRestartButton('generate-bot');
     setIsGeneratingBot(true);
     try {
       const aiClient = getAIClient();
@@ -4699,6 +4933,11 @@ Be creative and concise.`;
       setSelectedBotCharacter(newChar.id);
     } catch (err: any) {
       console.error("Failed to generate bot", err);
+      if (err?.retryWindowExpired) {
+        registerRetryRestartButton('generate-bot', 'Retry Bot For 2m', () => {
+          void handleGenerateBot();
+        });
+      }
       alert(`Failed to generate bot using model ${settingsRef.current.botModel}. Error: ${err.message}`);
     } finally {
       setIsGeneratingBot(false);
@@ -4902,6 +5141,7 @@ Be creative and concise.`;
                   setShowBotModal(false);
                   const selectedChar = botCharacters.find(c => c.id === selectedBotCharacter);
                   socket.emit('startBotMatch', {
+                    apiKey: settingsRef.current.apiKey?.trim() || '',
                     difficulty: difficultyLabels[botDifficulty],
                     botProfile: selectedChar?.content,
                     botName: selectedChar?.name,
@@ -6698,6 +6938,7 @@ Be creative and concise.`;
                 onClick={() => {
                   const botProfile = `# ${bot.name}\n\n**Class:** Level ${bot.level} Opponent\n\n**Difficulty:** ${bot.difficulty}\n\n${bot.description}\n\n### Abilities\n- Scaled to difficulty level ${bot.level}\n\n### Strategy\n- Fights according to ${bot.difficulty} AI behavior`;
                   socket.emit('startBotMatch', {
+                    apiKey: settingsRef.current.apiKey?.trim() || '',
                     difficulty: bot.difficulty,
                     botProfile,
                     botName: bot.name,
