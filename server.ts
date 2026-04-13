@@ -1459,6 +1459,8 @@ async function startServer() {
       let hasEmittedStart = false;
       let finalThoughts = '';
       let finalAnswer = '';
+      let displayedThoughts = '';
+      let displayedAnswer = '';
       let attempts = 0;
       let lastRetryError: any = null;
 
@@ -1527,8 +1529,17 @@ async function startServer() {
                 streamedAnswer += text;
               }
 
-              emitBattleStreamRefresh(roomId, 'thought', finalThoughts + streamedThoughts);
-              emitBattleStreamRefresh(roomId, 'answer', (finalAnswer + streamedAnswer).trim());
+              const nextDisplayedThoughts = finalThoughts + streamedThoughts;
+              const nextDisplayedAnswer = (finalAnswer + streamedAnswer).trim();
+
+              if (nextDisplayedThoughts.length >= displayedThoughts.length) {
+                displayedThoughts = nextDisplayedThoughts;
+                emitBattleStreamRefresh(roomId, 'thought', displayedThoughts);
+              }
+              if (nextDisplayedAnswer.length >= displayedAnswer.length) {
+                displayedAnswer = nextDisplayedAnswer;
+                emitBattleStreamRefresh(roomId, 'answer', displayedAnswer);
+              }
             };
 
             const apiConfig = {
@@ -1560,7 +1571,11 @@ async function startServer() {
                 throw streamError;
               }
 
-              const fallbackRes = await aiClient.models.generateContent(apiConfig as any);
+              const streamErrorInfo = classifyAIError(streamError);
+              const fallbackRes = await aiClient.models.generateContent({
+                ...apiConfig,
+                model: get503FallbackBattleModel(model, streamErrorInfo, attempts + 1),
+              } as any);
               const fallbackParts = fallbackRes?.candidates?.[0]?.content?.parts || [];
               modelParts = [];
               hasToolCall = false;
@@ -1583,6 +1598,8 @@ async function startServer() {
 
             finalThoughts += streamedThoughts;
             finalAnswer += streamedAnswer;
+            displayedThoughts = finalThoughts;
+            displayedAnswer = finalAnswer.trim();
 
             if (hasToolCall && toolCallPart?.functionCall) {
               const functionCall = toolCallPart.functionCall;
