@@ -106,11 +106,46 @@ interface ExplorationState {
   equippedArmor: string | null;
 }
 
+type AppSettings = {
+  apiKey: string;
+  charModel: string;
+  explorationModel: string;
+  battleModel: string;
+  botModel: string;
+  unlimitedTurnTime: boolean;
+};
+
 const DEFAULT_STARTING_GOLD = 25;
 const BATTLE_STREAM_THOUGHTS_PREFIX = 'STREAMING_THOUGHTS_';
 const BATTLE_STREAM_ANSWER_PREFIX = 'STREAMING_ANSWER_';
 const BATTLE_PLAYER_ACTIONS_PREFIX = 'PLAYER_ACTIONS_';
 const BATTLE_PENDING_ACTION_PREFIX = 'PENDING_PLAYER_ACTION_';
+const VALID_MODEL_OPTIONS = ['gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash'] as const;
+const DEFAULT_MODEL_SETTINGS = {
+  charModel: 'gemini-2.5-flash',
+  explorationModel: 'gemini-3-flash-preview',
+  battleModel: 'gemini-2.5-pro',
+  botModel: 'gemini-2.5-flash',
+};
+
+const sanitizeModelSettings = (value?: Partial<typeof DEFAULT_MODEL_SETTINGS> | null) => ({
+  charModel: typeof value?.charModel === 'string' && VALID_MODEL_OPTIONS.includes(value.charModel as typeof VALID_MODEL_OPTIONS[number])
+    ? value.charModel
+    : DEFAULT_MODEL_SETTINGS.charModel,
+  explorationModel: typeof value?.explorationModel === 'string' && VALID_MODEL_OPTIONS.includes(value.explorationModel as typeof VALID_MODEL_OPTIONS[number])
+    ? value.explorationModel
+    : DEFAULT_MODEL_SETTINGS.explorationModel,
+  battleModel: typeof value?.battleModel === 'string' && VALID_MODEL_OPTIONS.includes(value.battleModel as typeof VALID_MODEL_OPTIONS[number])
+    ? value.battleModel
+    : DEFAULT_MODEL_SETTINGS.battleModel,
+  botModel: typeof value?.botModel === 'string' && VALID_MODEL_OPTIONS.includes(value.botModel as typeof VALID_MODEL_OPTIONS[number])
+    ? value.botModel
+    : DEFAULT_MODEL_SETTINGS.botModel,
+});
+
+const isServiceUnavailableRetry = (errorInfo?: { statusCode?: number; statusText?: string } | null) => (
+  errorInfo?.statusCode === 503 || errorInfo?.statusText === 'UNAVAILABLE'
+);
 
 const logBattleDebug = (event: string, details: Record<string, unknown> = {}) => {
   const payload = {
@@ -451,6 +486,10 @@ const getWorldLocationById = (worldData: any, locationId?: string | null): World
   worldData?.locations?.find((entry: WorldLocation) => entry.id === locationId) || null
 );
 
+const getWorldIslandById = (worldData: any, islandId?: string | null) => (
+  worldData?.islands?.find((entry: any) => entry.id === islandId) || null
+);
+
 const getLocationHopDistance = (worldData: any, startLocationId?: string | null, endLocationId?: string | null): number => {
   if (!startLocationId || !endLocationId) return Number.POSITIVE_INFINITY;
   if (startLocationId === endLocationId) return 0;
@@ -480,8 +519,9 @@ const buildBattleMapContext = (worldData: any, mapState?: BattleMapState, roomPl
   let context = 'BATTLE MAP STATE:\n';
   for (const player of mapState.players) {
     const location = getWorldLocationById(worldData, player.locationId);
+    const island = getWorldIslandById(worldData, location?.islandId);
     const playerName = roomPlayers?.[player.id]?.character?.name || player.name;
-    context += `- ${playerName} is at grid (${player.x.toFixed(1)}, ${player.y.toFixed(1)}) near ${location?.name || player.locationId}. Connected routes: ${(location?.connections || []).join(', ') || 'none'}.\n`;
+    context += `- ${playerName} is at grid (${player.x.toFixed(1)}, ${player.y.toFixed(1)}) on ${island?.name || location?.islandId || 'an unknown island'} near ${location?.name || player.locationId}. Connected routes: ${(location?.connections || []).join(', ') || 'none'}.\n`;
   }
 
   if (mapState.players.length >= 2) {
@@ -489,9 +529,14 @@ const buildBattleMapContext = (worldData: any, mapState?: BattleMapState, roomPl
       for (let innerIndex = index + 1; innerIndex < mapState.players.length; innerIndex += 1) {
         const left = mapState.players[index];
         const right = mapState.players[innerIndex];
+        const leftLocation = getWorldLocationById(worldData, left.locationId);
+        const rightLocation = getWorldLocationById(worldData, right.locationId);
         const distance = getLocationHopDistance(worldData, left.locationId, right.locationId);
         const leftName = roomPlayers?.[left.id]?.character?.name || left.name;
         const rightName = roomPlayers?.[right.id]?.character?.name || right.name;
+        if (leftLocation?.islandId && rightLocation?.islandId && leftLocation.islandId !== rightLocation.islandId) {
+          context += `- ${leftName} and ${rightName} are on different islands with water between them.\n`;
+        }
         const distanceLabel = distance === 0
           ? 'sharing the same location'
           : distance === 1
@@ -682,28 +727,22 @@ export default function App() {
   const characterRef = useRef<Character | null>(null);
   const activeCharacterNameRef = useRef<string | null>(localStorage.getItem('duo_active_character_name'));
   
-  const [settings, setSettings] = useState(() => {
+  const [settings, setSettings] = useState<AppSettings>(() => {
     const defaultSettings = {
       apiKey: '',
-      charModel: 'gemini-2.5-flash',
-      explorationModel: 'gemini-3-flash-preview',
-      battleModel: 'gemini-2.5-pro',
-      botModel: 'gemini-2.5-flash',
+      ...DEFAULT_MODEL_SETTINGS,
       unlimitedTurnTime: true,
     };
     const saved = localStorage.getItem('duo_settings');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        const validModels = ['gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash'];
-        
-        // Ensure any old/invalid models are reset to defaults so we don't silently request a maxed out model
-        if (parsed.charModel && !validModels.includes(parsed.charModel)) parsed.charModel = defaultSettings.charModel;
-        if (parsed.explorationModel && !validModels.includes(parsed.explorationModel)) parsed.explorationModel = defaultSettings.explorationModel;
-        if (parsed.battleModel && !validModels.includes(parsed.battleModel)) parsed.battleModel = defaultSettings.battleModel;
-        if (parsed.botModel && !validModels.includes(parsed.botModel)) parsed.botModel = defaultSettings.botModel;
-        
-        return { ...defaultSettings, ...parsed, unlimitedTurnTime: true };
+        return {
+          ...defaultSettings,
+          ...parsed,
+          ...sanitizeModelSettings(parsed),
+          unlimitedTurnTime: true,
+        };
       } catch (e) {
         return defaultSettings;
       }
@@ -713,20 +752,40 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsPage, setSettingsPage] = useState<'general' | 'debug'>('general');
   const settingsRef = useRef(settings);
+  const settingsHydratedRef = useRef(false);
 
   useEffect(() => {
-    settingsRef.current = settings;
-    localStorage.setItem('duo_settings', JSON.stringify(settings));
-    // Sync model settings to room if we're the host
-    if (roomId) {
-      socket.emit('updateRoomSettings', {
-        charModel: settings.charModel,
-        explorationModel: settings.explorationModel,
-        battleModel: settings.battleModel,
-        botModel: settings.botModel,
-      });
-    }
-  }, [settings]);
+    let cancelled = false;
+
+    const hydrateSettings = async () => {
+      try {
+        const response = await fetch('/api/settings');
+        if (!response.ok) return;
+
+        const remoteSettings = await response.json();
+        if (cancelled || !remoteSettings) return;
+
+        setSettings(prev => ({
+          ...prev,
+          ...sanitizeModelSettings(remoteSettings),
+          unlimitedTurnTime: true,
+          apiKey: prev.apiKey,
+        }));
+      } catch (error) {
+        console.warn('Failed to load shared settings', error);
+      } finally {
+        if (!cancelled) {
+          settingsHydratedRef.current = true;
+        }
+      }
+    };
+
+    void hydrateSettings();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (character) {
@@ -896,6 +955,7 @@ export default function App() {
   const connectionPhaseRef = useRef<ConnectionPhase>('online');
   const [participantConnectionNotice, setParticipantConnectionNotice] = useState<{ text: string; tone: 'amber' | 'green' | 'blue' } | null>(null);
   const [charCreatorRetryAttempt, setCharCreatorRetryAttempt] = useState(0);
+  const [charCreator503RetryAttempt, setCharCreator503RetryAttempt] = useState(0);
   const [charCreatorError, setCharCreatorError] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const chatScrollContainerRef = useRef<HTMLDivElement>(null);
@@ -944,6 +1004,7 @@ export default function App() {
   const worldDataRef = useRef<any>(null);
   const activeExplorationStreamIdRef = useRef<string | null>(null);
   const [explorationRetryAttempt, setExplorationRetryAttempt] = useState(0);
+  const [exploration503RetryAttempt, setExploration503RetryAttempt] = useState(0);
   const [explorationError, setExplorationError] = useState<string | null>(null);
   const [explorationAutoScroll, setExplorationAutoScroll] = useState(true);
   const [showSurvivalDetails, setShowSurvivalDetails] = useState(false);
@@ -992,6 +1053,33 @@ export default function App() {
 
   // Battle state
   const [roomId, setRoomId] = useState<string | null>(null);
+  useEffect(() => {
+    settingsRef.current = settings;
+    localStorage.setItem('duo_settings', JSON.stringify(settings));
+    const modelSettingsPayload = {
+      charModel: settings.charModel,
+      explorationModel: settings.explorationModel,
+      battleModel: settings.battleModel,
+      botModel: settings.botModel,
+    };
+
+    if (roomId) {
+      socket.emit('updateRoomSettings', modelSettingsPayload);
+    }
+
+    if (!settingsHydratedRef.current) {
+      return;
+    }
+
+    void fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(modelSettingsPayload),
+    }).catch((error) => {
+      console.warn('Failed to persist shared settings', error);
+    });
+  }, [roomId, settings]);
+
   const [players, setPlayers] = useState<Record<string, any>>({});
   const playersRef = useRef<Record<string, any>>({});
   const [battleMapState, setBattleMapState] = useState<BattleMapState>(EMPTY_BATTLE_MAP_STATE);
@@ -1002,6 +1090,8 @@ export default function App() {
   const [battleInput, setBattleInput] = useState('');
   const [battleError, setBattleError] = useState<string | null>(null);
   const [retryAttempt, setRetryAttempt] = useState(0);
+  const [battle503RetryAttempt, setBattle503RetryAttempt] = useState(0);
+  const [bot503RetryAttempt, setBot503RetryAttempt] = useState(0);
   const [expandedThoughts, setExpandedThoughts] = useState<Set<number>>(new Set());
   const [expandedExplorationThoughts, setExpandedExplorationThoughts] = useState<Set<string>>(new Set());
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -1475,6 +1565,7 @@ export default function App() {
     }, 2500);
 
     const rewriteBotProfile = async () => {
+      setBot503RetryAttempt(0);
       try {
         const aiClient = getAIClient();
         const opponents = Object.entries(roomPlayers)
@@ -1501,6 +1592,7 @@ export default function App() {
           } catch (err: any) {
             const errorInfo = classifyAIError(err);
             if (!errorInfo.retryable || attempt >= 3) throw err;
+            setBot503RetryAttempt(isServiceUnavailableRetry(errorInfo) ? attempt + 1 : 0);
             console.warn(`[BotRewrite] Attempt ${attempt + 1} failed: ${errorInfo.label}, retrying...`);
             await new Promise(r => setTimeout(r, getAIRetryDelaySeconds(attempt + 1, errorInfo.suggestedRetrySeconds) * 1000));
           }
@@ -1508,6 +1600,7 @@ export default function App() {
 
         const rewrittenProfile = response?.text?.trim();
         if (!cancelled && rewrittenProfile) {
+          setBot503RetryAttempt(0);
           rewriteSubmitted = true;
           window.clearTimeout(previewFallbackTimeout);
           socket.emit('characterCreated', {
@@ -1517,10 +1610,12 @@ export default function App() {
           });
         }
       } catch (error) {
+        setBot503RetryAttempt(0);
         console.error('Failed to rewrite bot preparation profile', error);
       }
 
       if (!cancelled && !rewriteSubmitted) {
+        setBot503RetryAttempt(0);
         rewriteSubmitted = true;
         window.clearTimeout(previewFallbackTimeout);
         socket.emit('characterCreated', {
@@ -1555,6 +1650,7 @@ export default function App() {
     if (p2Data.lockedIn) return;
 
     setLocalRoomTypingIds(prev => prev.includes(botId) ? prev : [...prev, botId]);
+    setBot503RetryAttempt(0);
     try {
       const aiClient = getAIClient();
       const botPromptRes = await fetch('/api/prompts/bot_player.txt');
@@ -1596,14 +1692,17 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         } catch (err: any) {
           const errorInfo = classifyAIError(err);
           if (!errorInfo.retryable || attempt >= 3) throw err;
+          setBot503RetryAttempt(isServiceUnavailableRetry(errorInfo) ? attempt + 1 : 0);
           console.warn(`[BotAction] Attempt ${attempt + 1} failed: ${errorInfo.label}, retrying...`);
           await new Promise(r => setTimeout(r, getAIRetryDelaySeconds(attempt + 1, errorInfo.suggestedRetrySeconds) * 1000));
         }
       }
       
       const action = botRes?.text || "I do nothing.";
+      setBot503RetryAttempt(0);
       socket.emit('playerAction', { playerId: botId, action });
     } catch (error) {
+      setBot503RetryAttempt(0);
       console.error("Error generating bot action:", error);
       // Fallback: send a generic attack so the battle doesn't stall
       socket.emit('playerAction', {
@@ -1712,13 +1811,13 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         setArenaPreparation(prev => prev ? { ...prev, stage: data.phase as ArenaPreparationState['stage'] } : prev);
       }
       if (data.modelSettings) {
-        setSettings(prev => ({ ...prev, ...data.modelSettings, apiKey: prev.apiKey }));
+        setSettings(prev => ({ ...prev, ...sanitizeModelSettings(data.modelSettings), apiKey: prev.apiKey }));
       }
     });
 
     socket.on('roomSettingsUpdated', (modelSettings: any) => {
       if (modelSettings) {
-        setSettings(prev => ({ ...prev, ...modelSettings, apiKey: prev.apiKey }));
+        setSettings(prev => ({ ...prev, ...sanitizeModelSettings(modelSettings), apiKey: prev.apiKey }));
       }
     });
 
@@ -2019,6 +2118,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
 
       let attempts = 0;
       clearBattleStatusLog('battle-retry');
+      setBattle503RetryAttempt(0);
 
       const buildFallbackBattleNarrative = () => {
         const submittedActions = Object.values(room.players)
@@ -2189,6 +2289,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
                 });
                 clearBattleStatusLog('battle-retry');
                 setRetryAttempt(0);
+                setBattle503RetryAttempt(0);
                 setBattleError(null);
                 return;
               }
@@ -2238,6 +2339,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
               });
               clearBattleStatusLog('battle-retry');
               setRetryAttempt(0);
+              setBattle503RetryAttempt(0);
               setBattleError(null);
               return;
             }
@@ -2254,12 +2356,16 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
             signal = abortControllerRef.current.signal;
             const delay = getAIRetryDelaySeconds(attempts);
             setRetryAttempt(attempts);
+            setBattle503RetryAttempt(0);
             setBattleError(`Model stream stalled. Retrying in ${delay}s...`);
             upsertBattleStatusLog('battle-retry', `⚠️ Model stream stalled. Retrying in **${delay}s**. Attempt **#${attempts}**...`);
             await new Promise(resolve => setTimeout(resolve, delay * 1000));
             continue;
           }
-          if (error.name === 'AbortError') return;
+          if (error.name === 'AbortError') {
+            setBattle503RetryAttempt(0);
+            return;
+          }
           console.error("Error resolving turn:", error);
 
           const errorInfo = classifyAIError(error);
@@ -2272,11 +2378,13 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
               setBattleError(formattedError);
               upsertBattleStatusLog('battle-retry', `⚠️ Gave up after ${attempts} attempts: ${formattedError}`);
               setRetryAttempt(0);
+              setBattle503RetryAttempt(0);
               break;
             }
             const delay = getAIRetryDelaySeconds(attempts, errorInfo.suggestedRetrySeconds);
             const delaySec = Math.round(delay);
             setRetryAttempt(attempts);
+            setBattle503RetryAttempt(isServiceUnavailableRetry(errorInfo) ? attempts : 0);
             setBattleError(`${errorInfo.label}. Retrying in ${delaySec}s...`);
             upsertBattleStatusLog('battle-retry', `⚠️ ${errorInfo.label}. Retrying in **${delaySec}s**. Attempt **#${attempts}**...`);
             await new Promise(resolve => setTimeout(resolve, delay * 1000));
@@ -2288,6 +2396,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
           setBattleError(formattedError);
           upsertBattleStatusLog('battle-retry', `⚠️ Battle resolution error: ${formattedError}`);
           setRetryAttempt(0);
+          setBattle503RetryAttempt(0);
           break;
         }
       }
@@ -2567,6 +2676,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       setIsExplorationProcessing(true);
       setExplorationError(null);
       setExplorationRetryAttempt(0);
+      setExploration503RetryAttempt(0);
       
       // Show all players' actions in the log
       for (const a of data.allActions) {
@@ -2596,6 +2706,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       setIsExplorationProcessing(false);
       setExplorationLockStatus([]);
       setExplorationRetryAttempt(0);
+      setExploration503RetryAttempt(0);
       setExplorationError(null);
       clearExplorationStatusMessage('exploration-retry');
       socket.emit('explorationActing', { acting: false });
@@ -2749,9 +2860,10 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       });
     });
 
-    socket.on('explorationRetry', (data: { requestId: string; attempt: number; delay: number; label: string }) => {
+    socket.on('explorationRetry', (data: { requestId: string; attempt: number; delay: number; label: string; statusCode?: number; statusText?: string }) => {
       if (activeExplorationStreamIdRef.current && activeExplorationStreamIdRef.current !== data.requestId) return;
       setExplorationRetryAttempt(data.attempt);
+      setExploration503RetryAttempt(isServiceUnavailableRetry(data) ? data.attempt : 0);
       setExplorationError(`${data.label}. Retrying in ${data.delay}s...`);
       upsertExplorationStatusMessage('exploration-retry', `⚠️ ${data.label}. Retrying in **${data.delay}s**. Attempt **#${data.attempt}**...`);
       upsertExplorationStreamMessage(data.requestId, '', 'thought');
@@ -2763,6 +2875,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       setIsExplorationProcessing(false);
       setExplorationLockStatus([]);
       setExplorationRetryAttempt(0);
+      setExploration503RetryAttempt(0);
       setExplorationError(`Error: ${data.message}`);
       socket.emit('explorationActing', { acting: false });
       clearExplorationStreamMessage(data.requestId);
@@ -3031,6 +3144,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
     let attempts = 0;
     const charAbort = new AbortController();
     const CHAR_STREAM_STALL_MS = 60_000;
+    setCharCreator503RetryAttempt(0);
 
     while (true) {
       if (charAbort.signal.aborted) break;
@@ -3115,12 +3229,14 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         clearCharStallTimer();
         clearChatStatusMessage('char-creator-retry');
         setCharCreatorRetryAttempt(0);
+        setCharCreator503RetryAttempt(0);
         setCharCreatorError(null);
         break;
 
       } catch (error: any) {
         clearCharStallTimer();
         if (error.name === 'AbortError' || charAbort.signal.aborted) {
+          setCharCreator503RetryAttempt(0);
           console.warn('Character creator stream aborted (timeout or cleanup)');
           setMessages(prev => {
             const newMsgs = [...prev];
@@ -3148,6 +3264,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
           const delay = getAIRetryDelaySeconds(attempts, errorInfo.suggestedRetrySeconds);
           const delaySec = Math.round(delay);
           setCharCreatorRetryAttempt(attempts);
+          setCharCreator503RetryAttempt(isServiceUnavailableRetry(errorInfo) ? attempts : 0);
           setCharCreatorError(`${errorInfo.label}. Retrying in ${delaySec}s...`);
           upsertChatStatusMessage('char-creator-retry', `⚠️ ${errorInfo.label}. Retrying in **${delaySec}s**. Attempt **#${attempts}**...`);
           await new Promise(resolve => setTimeout(resolve, delay * 1000));
@@ -3164,6 +3281,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
           return [...newMsgs, { role: 'system', text: errorMsg }];
         });
         setCharCreatorRetryAttempt(0);
+        setCharCreator503RetryAttempt(0);
         setCharCreatorError(formattedError);
         upsertChatStatusMessage('char-creator-retry', `⚠️ Character creator error: ${formattedError}`);
         break;
@@ -3313,6 +3431,7 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
       setIsExplorationProcessing(true);
       setExplorationError(null);
       setExplorationRetryAttempt(0);
+      setExploration503RetryAttempt(0);
       clearExplorationStatusMessage('exploration-retry');
       socket.emit('explorationActing', { acting: true });
       socket.emit('explorationAction', { action, ...getExplorationContext() });
@@ -3453,14 +3572,44 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
         .substring(0, 1200);
       const battleLocationSummary = battleMapState.players.map((player) => {
         const location = getWorldLocationById(worldDataRef.current, player.locationId);
+        const island = getWorldIslandById(worldDataRef.current, location?.islandId);
         const playerName = players[player.id]?.character?.name || player.name;
-        return `${playerName} is near ${location?.name || player.locationId} at (${player.x.toFixed(1)}, ${player.y.toFixed(1)})`;
+        return `${playerName} is on ${island?.name || location?.islandId || 'an unknown island'}, near ${location?.name || player.locationId} at (${player.x.toFixed(1)}, ${player.y.toFixed(1)})`;
       }).join('; ');
+      const orderedCombatants = Object.values(players)
+        .filter((p: any) => !p.character?.isNpcAlly)
+        .slice(0, 2);
+      const combatantAnchors = orderedCombatants.map((participant: any, idx: number) => {
+        const mapPlayer = battleMapState.players.find((entry) => entry.id === participant.id);
+        const location = getWorldLocationById(worldDataRef.current, mapPlayer?.locationId);
+        const island = getWorldIslandById(worldDataRef.current, location?.islandId);
+
+        return {
+          side: idx === 0 ? 'LEFT' : 'RIGHT',
+          name: participant.character?.name || `Combatant ${idx + 1}`,
+          locationId: mapPlayer?.locationId || null,
+          locationName: location?.name || mapPlayer?.locationId || 'unknown location',
+          islandId: island?.id || location?.islandId || null,
+          islandName: island?.name || location?.islandId || 'unknown island',
+        };
+      });
+      const leftLocationId = combatantAnchors[0]?.locationId || null;
+      const rightLocationId = combatantAnchors[1]?.locationId || null;
+      const combatantHopDistance = leftLocationId && rightLocationId
+        ? getLocationHopDistance(worldDataRef.current, leftLocationId, rightLocationId)
+        : Number.POSITIVE_INFINITY;
+      const separatedIslands = !!combatantAnchors[0]?.islandId && !!combatantAnchors[1]?.islandId && combatantAnchors[0].islandId !== combatantAnchors[1].islandId;
+      const compositionDirective = separatedIslands
+        ? `COMPOSITION MODE: split view or a wide establishing shot with both islands visible. ${combatantAnchors[0]?.name || 'Combatant 1'} must remain on ${combatantAnchors[0]?.islandName || 'their island'} and ${combatantAnchors[1]?.name || 'Combatant 2'} must remain on ${combatantAnchors[1]?.islandName || 'their island'}. Show visible ocean, distance, or distinct landmasses between them. Do NOT place both fighters on the same ground plane, beach, bridge, arena floor, or cliff.`
+        : combatantHopDistance > 0
+          ? `COMPOSITION MODE: single-island wide view. Both fighters are on ${combatantAnchors[0]?.islandName || 'the same island'} but separated across the terrain. Preserve that distance with a broad island view instead of staging them shoulder-to-shoulder.`
+          : 'COMPOSITION MODE: shared close battlefield. A tighter duel frame is allowed because the combatants are currently close together.';
+      const combatantAnchorSummary = combatantAnchors
+        .map((anchor) => `- ${anchor.side}: ${anchor.name} is on ${anchor.islandName} near ${anchor.locationName}.`)
+        .join('\n');
       const layoutReferenceDataUrl = await fetchImageAssetAsDataUrl('/image.png');
       const layoutReferencePart = buildInlineImagePartFromDataUrl(layoutReferenceDataUrl);
-      const avatarReferenceParts = Object.values(players)
-        .filter((participant: any) => !participant.character?.isNpcAlly)
-        .slice(0, 2)
+      const avatarReferenceParts = orderedCombatants
         .flatMap((participant: any, idx: number) => {
           const avatarPart = buildInlineImagePartFromDataUrl(participant.character?.imageUrl);
           if (!avatarPart) return [];
@@ -3470,9 +3619,6 @@ What is your action? Keep it short and tactical. Remember, you are ${p2Data.char
             avatarPart,
           ];
         });
-      const orderedCombatants = Object.values(players)
-        .filter((p: any) => !p.character?.isNpcAlly)
-        .slice(0, 2);
       const leftName = (orderedCombatants[0] as any)?.character?.name || 'Combatant 1';
       const rightName = (orderedCombatants[1] as any)?.character?.name || 'Combatant 2';
       const prompt = `Generate a dynamic battle scene illustration for ${playerNames}. This must be a NEW poster image for the CURRENT turn, not an edit of any previous turn image. Latest resolved battle narrative: ${recentLogs || 'The battle has just begun.'}. Current positions: ${battleLocationSummary || 'Use the active battlefield state.'}. Authoritative battlefield state: ${battleMapImageContext || 'Use the active battlefield state.'}. Style: fantasy RPG battle poster art, dramatic action poses, magical effects, vibrant colors.
@@ -3482,9 +3628,13 @@ This battle image must ALWAYS include cinematic UI text overlays integrated into
 - Small location label text for at least one relevant battlefield location.
 - A bottom split result panel: ${leftName} on the LEFT, ${rightName} on the RIGHT. Each side shows the character's name, a cool icon, the move name, and a short outcome. Match each character to their reference avatar — do NOT swap them.
 
+Spatial composition requirements:
+${compositionDirective}
+${combatantAnchorSummary || '- Use the authoritative battlefield state to anchor each fighter.'}
+
     Match the included reference image's poster language: strong comic-style title at the top, small floating location text, and bottom action-result banners with readable typography. Use the reference for layout and typography treatment only. Update all scene content, labels, move names, and locations to reflect THIS turn's narrative and current battlefield positions. Show each character's current equipment and weapons as described in the battle narrative — if a character just acquired a new weapon, they must be holding it.
 
-    Do not invent terrain interactions that are not supported by the latest narrative or authoritative battlefield state. Do not place a combatant in water, waist-deep surf, or shoreline action unless the narrative or current map state explicitly puts them there. If one fighter is farther from the water or behind cover, keep that staging accurate instead of moving them for composition.`;
+  Do not invent terrain interactions that are not supported by the latest narrative or authoritative battlefield state. Do not place a combatant in water, waist-deep surf, or shoreline action unless the narrative or current map state explicitly puts them there. If one fighter is farther from the water or behind cover, keep that staging accurate instead of moving them for composition. If the fighters are on different islands, the artwork must clearly show separate islands or a split view; never collapse them onto the same patch of land.`;
 
       logBattleDebug('image_generation_start', {
         roomId,
@@ -3494,6 +3644,8 @@ This battle image must ALWAYS include cinematic UI text overlays integrated into
         recentLogsPreview: recentLogs,
         battleLocationSummary,
         battleMapImageContext,
+        compositionDirective,
+        combatantAnchors,
         hasLayoutReference: !!layoutReferencePart,
         avatarReferenceCount: avatarReferenceParts.length / 2,
       });
@@ -3780,6 +3932,30 @@ This battle image must ALWAYS include cinematic UI text overlays integrated into
             </div>
           </>
         )}
+      </div>
+    );
+  };
+
+  const render503RetryPills = () => {
+    const pills = [
+      charCreator503RetryAttempt > 0 ? { key: 'char-creator', label: '503 Character', attempt: charCreator503RetryAttempt } : null,
+      exploration503RetryAttempt > 0 ? { key: 'exploration', label: '503 Explore', attempt: exploration503RetryAttempt } : null,
+      battle503RetryAttempt > 0 ? { key: 'battle', label: '503 Battle', attempt: battle503RetryAttempt } : null,
+      bot503RetryAttempt > 0 ? { key: 'bot', label: '503 Bot', attempt: bot503RetryAttempt } : null,
+    ].filter(Boolean) as Array<{ key: string; label: string; attempt: number }>;
+
+    if (pills.length === 0) return null;
+
+    return (
+      <div className="px-2 pt-2 flex flex-wrap justify-end gap-1.5 bg-white">
+        {pills.map((pill) => (
+          <span
+            key={pill.key}
+            className="inline-flex items-center rounded-full border border-amber-300 bg-amber-100 px-2.5 py-1 text-[10px] font-black uppercase text-amber-900 shadow-sm"
+          >
+            {pill.label} Retry #{pill.attempt}
+          </span>
+        ))}
       </div>
     );
   };
@@ -5835,6 +6011,7 @@ Be creative and concise.`;
     <div className="h-safe-screen bg-duo-bg flex justify-center overflow-hidden">
       <div className="w-full max-w-md bg-white h-full min-h-0 flex flex-col relative shadow-2xl">
         {renderTopBar()}
+        {render503RetryPills()}
         
         {gameState === 'menu' && renderMenu()}
         {gameState === 'char_creation' && renderCharCreation()}

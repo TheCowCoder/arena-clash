@@ -325,15 +325,29 @@ async function startServer() {
   app.post("/api/settings", async (req: any, res) => {
     if (!db) return res.status(503).json({ error: "Database not available" });
     try {
-      const allowedKeys = ['unlimitedTurnTime', 'arenaPreviewSeconds', 'arenaTweakSeconds', 'battleTurnSeconds'];
+      const allowedKeys = ['unlimitedTurnTime', 'arenaPreviewSeconds', 'arenaTweakSeconds', 'battleTurnSeconds', 'charModel', 'explorationModel', 'battleModel', 'botModel'];
+      const modelKeys = new Set(['charModel', 'explorationModel', 'battleModel', 'botModel']);
+      const validModels = new Set(['gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash']);
       const data: Record<string, any> = {};
       for (const key of allowedKeys) {
-        if (req.body[key] !== undefined) data[key] = req.body[key];
+        if (req.body[key] === undefined) continue;
+        if (modelKeys.has(key)) {
+          if (typeof req.body[key] === 'string' && validModels.has(req.body[key])) {
+            data[key] = req.body[key];
+          }
+          continue;
+        }
+        data[key] = req.body[key];
       }
-      data.unlimitedTurnTime = ALWAYS_UNLIMITED_TURN_TIME;
+      const existing = await db.collection("settings").findOne({ _id: "global" as any });
+      const mergedData = {
+        ...(existing?.data || {}),
+        ...data,
+        unlimitedTurnTime: ALWAYS_UNLIMITED_TURN_TIME,
+      };
       await db.collection("settings").updateOne(
         { _id: "global" as any },
-        { $set: { data, updatedAt: new Date() } },
+        { $set: { data: mergedData, updatedAt: new Date() } },
         { upsert: true }
       );
       res.json({ success: true });
@@ -351,6 +365,7 @@ async function startServer() {
     arenaPreviewSeconds?: number;
     arenaTweakSeconds?: number;
     battleTurnSeconds?: number;
+    modelSettings?: { charModel?: string; explorationModel?: string; battleModel?: string; botModel?: string } | null;
   }
   let matchmakingQueue: Record<string, QueuePlayer> = {};
   const rooms: Record<string, any> = {};
@@ -2115,6 +2130,8 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
             attempt: attempts,
             delay,
             label: errorInfo.label,
+            statusCode: errorInfo.statusCode,
+            statusText: errorInfo.statusText,
           });
         }
         if (!errorInfo.retryable) {
@@ -2984,7 +3001,7 @@ ${npcsAtLocation.map((n: any) => `NPC PROFILE - ${n?.name}:\n${n?.profileMarkdow
       emitBattleMapState(roomId);
     });
 
-    socket.on("enterArena", (data?: { unlimitedTurnTime?: boolean; arenaPreviewSeconds?: number; arenaTweakSeconds?: number; battleTurnSeconds?: number }) => {
+    socket.on("enterArena", (data?: { unlimitedTurnTime?: boolean; arenaPreviewSeconds?: number; arenaTweakSeconds?: number; battleTurnSeconds?: number; modelSettings?: { charModel?: string; explorationModel?: string; battleModel?: string; botModel?: string } | null }) => {
       if (!players[socket.id]?.character) {
         socket.emit("error", "Create a character first.");
         return;
