@@ -419,6 +419,9 @@ async function startServer() {
 
   const getServerSideApiKey = (value: unknown) => {
     if (typeof value === 'string' && value.trim()) return value.trim();
+    if (process.env.VERTEX === 'true') {
+      return process.env.VERTEX_API_KEY || '';
+    }
     return process.env.GEMINI_API_KEY || process.env.API_KEY || '';
   };
 

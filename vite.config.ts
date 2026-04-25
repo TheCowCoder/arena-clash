@@ -7,10 +7,11 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
+  const apiKey = env.VERTEX === 'true' ? env.VERTEX_API_KEY : env.GEMINI_API_KEY;
   return {
     plugins: [react(), tailwindcss(), cloudflare()],
     define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+      'process.env.GEMINI_API_KEY': JSON.stringify(apiKey),
     },
     resolve: {
       alias: {
